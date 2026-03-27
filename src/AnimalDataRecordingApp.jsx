@@ -200,6 +200,77 @@ function splitSireString(value) {
   return { bullNo: parts[0] || "", setNo: parts[1] || "" };
 }
 
+
+function getAnimalDisplayCategory(animal) {
+  return animal?.category === "Female" ? getFemaleLifecycle(animal) : (animal?.isBreedingBull === "Yes" ? `Breeding Bull (${animal?.breedingSet || "Set blank"})` : "Male");
+}
+function getLinkedBullByAnimal(animal, allAnimals) {
+  if (!animal) return null;
+  const sireTag = animal.linkedSireTag || inferLinkedSireFromStoredData(animal, allAnimals).linkedSireTag || "";
+  if (!sireTag) return null;
+  return (allAnimals || []).find((a) => a.category === "Male" && a.tagNo === sireTag) || null;
+}
+function exportBullHistoryPdf(bull, femaleProgenies, maleProgenies) {
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  doc.setFontSize(14);
+  doc.text("BREEDING BULL HISTORY SHEET", 148, 12, { align: "center" });
+  doc.setFontSize(10);
+  doc.text("ICAR-CENTRAL INSTITUTE FOR RESEARCH ON BUFFALOES", 148, 18, { align: "center" });
+  doc.text("SUB-CAMPUS, NABHA PUNJAB 147201", 148, 23, { align: "center" });
+
+  doc.setFontSize(9);
+  doc.text(`Bull No.: ${bull?.tagNo || ""}`, 14, 32);
+  doc.text(`Breed: ${bull?.breed || ""}`, 60, 32);
+  doc.text(`DOB: ${bull?.dob || ""}`, 105, 32);
+  doc.text(`Breeding Set: ${bull?.breedingSet || ""}`, 145, 32);
+  doc.text(`Book Value: ${bull?.maleDetails?.historyMeta?.bookValue || ""}`, 215, 32);
+
+  autoTable(doc, {
+    startY: 38,
+    styles: { fontSize: 7, cellPadding: 1.4, overflow: "linebreak" },
+    headStyles: { fillColor: [220, 245, 232], textColor: 20, fontStyle: "bold" },
+    theme: "grid",
+    head: [["Section", "Value"]],
+    body: [
+      ["Total female progenies", String(femaleProgenies.length)],
+      ["Total male progenies", String(maleProgenies.length)],
+      ["Archived linked progenies", String([...femaleProgenies, ...maleProgenies].filter((a) => isArchivedAnimal(a)).length)],
+      ["Daughters in milk", String(femaleProgenies.filter((a) => getFemaleLifecycle(a) === "Milk").length)],
+      ["Remarks", bull?.maleDetails?.historyMeta?.remarks || ""],
+      ["Lineage model", "ID + text fallback"],
+    ],
+    margin: { left: 10, right: 10 },
+  });
+
+  autoTable(doc, {
+    startY: doc.lastAutoTable.finalY + 6,
+    styles: { fontSize: 6.5, cellPadding: 1.1, overflow: "linebreak" },
+    headStyles: { fillColor: [220, 245, 232], textColor: 20, fontStyle: "bold" },
+    theme: "grid",
+    head: [["Progeny Type", "Tag No.", "DOB", "Current Category / Status", "Dam", "Sire Link"]],
+    body: [
+      ...femaleProgenies.map((a) => [
+        "Female",
+        a.tagNo || "",
+        a.dob || "",
+        getFemaleLifecycle(a),
+        a.femaleDetails?.pedigree?.dam || "",
+        `${a.linkedSireTag || ""}${a.linkedSireSet ? "/" + a.linkedSireSet : ""}`,
+      ]),
+      ...maleProgenies.map((a) => [
+        "Male",
+        a.tagNo || "",
+        a.dob || "",
+        a.status || "",
+        a.maleDetails?.pedigree?.dam || "",
+        `${a.linkedSireTag || ""}${a.linkedSireSet ? "/" + a.linkedSireSet : ""}`,
+      ]),
+    ],
+    margin: { left: 10, right: 10 },
+  });
+
+  doc.save(`breeding-bull-history-sheet-${bull?.tagNo || "bull"}.pdf`);
+}
 function inferLinkedSireFromStoredData(animal, allAnimals) {
   const sireText = animal?.category === "Female"
     ? animal.femaleDetails?.pedigree?.sire || ""
@@ -420,6 +491,21 @@ export default function AnimalDataRecordingApp() {
   }, [normalizedAnimals, selectedAnimal]);
   const daughterProductionSummary = useMemo(() => summarizeDaughterProduction(femaleProgenies), [femaleProgenies]);
   const daughterReproductionSummary = useMemo(() => summarizeDaughterReproduction(femaleProgenies), [femaleProgenies]);
+  const dashboardData = useMemo(() => {
+    const femaleAnimals = normalizedAnimals.filter((a) => a.category === "Female");
+    const maleAnimals = normalizedAnimals.filter((a) => a.category === "Male");
+    const breedingBulls = maleAnimals.filter((a) => a.isBreedingBull === "Yes");
+    const archivedCount = normalizedAnimals.filter((a) => isArchivedAnimal(a)).length;
+    return {
+      femaleAnimals,
+      maleAnimals,
+      breedingBulls,
+      archivedCount,
+      pregnantFemales: femaleAnimals.filter((a) =>
+        (a.femaleDetails?.reproductionParities || []).some((r) => Boolean(r.conceptionDate))
+      ).length,
+    };
+  }, [normalizedAnimals]);
 
   function handleFormStatusChange(status) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, status })); }
   function handleFormCategoryChange(category) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, category })); }
@@ -601,6 +687,7 @@ export default function AnimalDataRecordingApp() {
             <div className="action-row">
               <button className="primary-btn" onClick={() => setShowAdd(true)}>Add Animal</button>
               {selectedAnimal?.category === "Female" && <button className="secondary-btn" onClick={() => exportHistoryPdf(selectedAnimal)}>Export History PDF</button>}
+              {selectedAnimal?.category === "Male" && selectedAnimal?.isBreedingBull === "Yes" && <button className="secondary-btn" onClick={() => exportBullHistoryPdf(selectedAnimal, femaleProgenies, maleProgenies)}>Export Bull PDF</button>}
             </div>
           </div>
         </div>
@@ -676,6 +763,15 @@ export default function AnimalDataRecordingApp() {
           <StatCard title="Dry" value={stats.dryCount} />
         </div>
 
+        <Section title="Dashboard">
+          <div className="stats-grid">
+            <StatCard title="Current Herd" value={activeAnimals.length} />
+            <StatCard title="Archived" value={dashboardData.archivedCount} />
+            <StatCard title="Breeding Bulls" value={dashboardData.breedingBulls.length} />
+            <StatCard title="Pregnant Females" value={dashboardData.pregnantFemales} />
+          </div>
+        </Section>
+
         <div className="main-grid">
           <Section title="Herd Registry">
             <TextField label="Search" value={search} onChange={setSearch} />
@@ -707,6 +803,7 @@ export default function AnimalDataRecordingApp() {
                   <div><strong>Status:</strong> {selectedAnimal.status}</div>
                   <div><strong>Identification Mark:</strong> {selectedAnimal.identificationMark || "—"}</div>
                   {selectedAnimal.category === "Female" && <div><strong>Current category:</strong> {getFemaleLifecycle(selectedAnimal)}</div>}
+                  {selectedAnimal.category === "Female" && <div><strong>Linked sire bull:</strong> {getLinkedBullByAnimal(selectedAnimal, normalizedAnimals)?.tagNo || selectedAnimal.linkedSireTag || "—"}</div>}
                   {selectedAnimal.category === "Male" && <div><strong>Breeding bull:</strong> {selectedAnimal.isBreedingBull === "Yes" ? `Yes (${selectedAnimal.breedingSet || "Set blank"})` : "No"}</div>}
                   {selectedAnimal.category === "Male" && selectedAnimal.isBreedingBull === "Yes" && <div><strong>Linked progenies:</strong> {femaleProgenies.length + maleProgenies.length}</div>}
                 </div>
@@ -854,6 +951,12 @@ export default function AnimalDataRecordingApp() {
                       <StatCard title="Daughters in milk" value={femaleProgenies.filter((a) => getFemaleLifecycle(a) === "Milk").length} />
                       <StatCard title="Lineage mode" value={"ID + text"} />
                     </div>
+                    <div className="stats-grid slim-stats">
+                      <StatCard title="Female progenies" value={femaleProgenies.length} />
+                      <StatCard title="Male progenies" value={maleProgenies.length} />
+                      <StatCard title="Archived linked" value={[...femaleProgenies, ...maleProgenies].filter((a) => isArchivedAnimal(a)).length} />
+                      <StatCard title="Daughters in milk" value={femaleProgenies.filter((a) => getFemaleLifecycle(a) === "Milk").length} />
+                    </div>
                     <div className="table-wrap">
                       <table className="history-table">
                         <thead><tr><th>Parity</th><th>Date Calved</th><th>GP</th><th>Sex of Calf</th><th>Tag No. of Calf</th><th>Date of 1st AI</th><th>Date of Conception</th><th>Bull No./Set No.</th><th>Total AI</th><th>Dry Date</th><th>TLMY</th><th>SLMY</th><th>LL</th><th>PY</th><th>SP</th><th>CI</th><th>Fat %</th><th>SNF %</th><th>TS %</th></tr></thead>
@@ -912,7 +1015,7 @@ export default function AnimalDataRecordingApp() {
                           <tbody>{femaleProgenies.map((a) => <tr key={a.id}><td>{a.tagNo}</td><td>{a.dob || ""}</td><td>{a.breed}</td><td>{getFemaleLifecycle(a)}</td><td>{a.femaleDetails?.pedigree?.dam || ""}</td></tr>)}</tbody>
                         </table>
                         {femaleProgenies.length === 0 && <div className="empty-note">No female progenies linked yet.</div>}
-                        {femaleProgenies.length > 0 && <div className="helper-note">Future records now prefer explicit sire linkage over text-only matching.</div>}
+                        {femaleProgenies.length > 0 && <div className="helper-note">Future records now prefer explicit sire linkage over text-only matching. Lineage is now more stable for future edits and exports.</div>}
                       </div>
                     )}
                     {maleProgenySubTab === "male" && (
@@ -922,7 +1025,7 @@ export default function AnimalDataRecordingApp() {
                           <tbody>{maleProgenies.map((a) => <tr key={a.id}><td>{a.tagNo}</td><td>{a.dob || ""}</td><td>{a.breed}</td><td>{a.status}</td><td>{a.maleDetails?.pedigree?.dam || ""}</td></tr>)}</tbody>
                         </table>
                         {maleProgenies.length === 0 && <div className="empty-note">No male progenies linked yet.</div>}
-                        {maleProgenies.length > 0 && <div className="helper-note">Future records now prefer explicit sire linkage over text-only matching.</div>}
+                        {maleProgenies.length > 0 && <div className="helper-note">Future records now prefer explicit sire linkage over text-only matching. Lineage is now more stable for future edits and exports.</div>}
                       </div>
                     )}
                   </div>
@@ -996,6 +1099,7 @@ export default function AnimalDataRecordingApp() {
                       <TextField label="Book value" value={selectedAnimal.maleDetails.historyMeta.bookValue || ""} onChange={(v) => updateMaleHistoryMeta("bookValue", v)} />
                       <TextField label="Breeding set" value={selectedAnimal.breedingSet || ""} onChange={() => {}} readOnly />
                     </Grid>
+                    <div className="action-row"><button className="secondary-btn" onClick={() => exportBullHistoryPdf(selectedAnimal, femaleProgenies, maleProgenies)}>Export Bull PDF</button></div>
                     <div className="table-wrap">
                       <table className="history-table">
                         <thead><tr><th>Type</th><th>Count</th></tr></thead>

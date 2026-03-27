@@ -1,3 +1,3 @@
-# Phase 2.9 patch
+# Phase 3.0 patch
 
-Adds stronger future-facing bull-to-progeny ID linkage, lineage backfill from existing pedigree text, propagation when breeding bull tag/set is edited, and improved bull lineage summaries.
+Adds cleaner dashboards, export-ready breeding bull history sheet PDF, and stronger lineage visibility.
