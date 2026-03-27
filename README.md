@@ -1,3 +1,3 @@
-# Phase 2.2 patch
+# Phase 2.3 patch
 
-Adds calf sire auto-fill, auto calf creation, and pedigree auto-linking.
+Adds production tab, Friday records, and first recordable Friday rule.

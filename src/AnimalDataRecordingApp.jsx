@@ -3,9 +3,10 @@ import React, { useMemo, useState } from "react";
 const BREEDS = ["Murrah buffalo", "Nili-Ravi buffalo"];
 const SEX_OPTIONS = ["Female", "Male"];
 const STATUS_OPTIONS = ["Active (present in herd)", "Dead", "Culled"];
-const FEMALE_TABS = ["pedigree", "reproduction", "calving"];
+const FEMALE_TABS = ["pedigree", "reproduction", "calving", "production"];
 const AI_RESULTS = ["Pending", "Negative", "Conceived"];
 const CALVING_OUTCOMES = ["Normal calving", "Stillbirth", "Abortion"];
+const ENTRY_MODES = ["Manual", "Friday Records"];
 const COLOSTRUM_DAYS = 5;
 
 const emptyAnimal = {
@@ -60,6 +61,33 @@ function makeCalvingParity(parityNo) {
   };
 }
 
+function makeFridayRecord(date = "") {
+  return {
+    date,
+    morningMilk: "",
+    eveningMilk: "",
+    totalDailyYield: "",
+    fatPct: "",
+    snfPct: "",
+    tsPct: "",
+  };
+}
+
+function makeProductionLactation(parityNo) {
+  return {
+    parityNo: String(parityNo),
+    entryMode: "Manual",
+    calvingDate: "",
+    dryDate: "",
+    manualSummary: {
+      totalLactationMilk: "",
+      standardLactationMilk: "",
+      peakYield: "",
+    },
+    fridayRecords: [],
+  };
+}
+
 function parseDisplayDate(value) {
   if (!value || typeof value !== "string") return null;
   const parts = value.trim().split("/");
@@ -91,6 +119,13 @@ function addDays(dateStr, days) {
   const copy = new Date(dt);
   copy.setDate(copy.getDate() + days);
   return formatDateDisplay(copy);
+}
+
+function daysBetween(start, end) {
+  const a = parseDisplayDate(start);
+  const b = parseDisplayDate(end);
+  if (!a || !b) return 0;
+  return Math.max(0, Math.round((b.getTime() - a.getTime()) / 86400000));
 }
 
 function normalizeRomanInput(value) {
@@ -153,15 +188,20 @@ function withDefaults(animal) {
     femaleDetails: animal.category === "Female" ? {
       pedigree: { ...emptyPedigree, ...(animal.femaleDetails?.pedigree || {}) },
       reproductionParities: animal.femaleDetails?.reproductionParities?.length
-        ? animal.femaleDetails.reproductionParities.map((p) => ({
-            ...p,
-            aiRecords: (p.aiRecords || []).map((r) => ({ ...r })),
-          }))
+        ? animal.femaleDetails.reproductionParities.map((p) => ({ ...p, aiRecords: (p.aiRecords || []).map((r) => ({ ...r })) }))
         : [makeReproParity(0)],
       selectedReproParity: animal.femaleDetails?.selectedReproParity || "0",
       calvingParities: animal.femaleDetails?.calvingParities?.length
         ? animal.femaleDetails.calvingParities.map((p) => ({ ...p }))
         : [makeCalvingParity(1)],
+      productionLactations: animal.femaleDetails?.productionLactations?.length
+        ? animal.femaleDetails.productionLactations.map((l) => ({
+            ...l,
+            manualSummary: { totalLactationMilk: "", standardLactationMilk: "", peakYield: "", ...(l.manualSummary || {}) },
+            fridayRecords: (l.fridayRecords || []).map((r) => ({ ...r })),
+          }))
+        : [makeProductionLactation(1)],
+      selectedProductionParity: animal.femaleDetails?.selectedProductionParity || "1",
     } : undefined,
     maleDetails: animal.category === "Male" ? {
       pedigree: { ...emptyPedigree, ...(animal.maleDetails?.pedigree || {}) },
@@ -235,6 +275,8 @@ function buildAutoCalfAnimal(dam, calvingParity) {
         reproductionParities: [makeReproParity(0)],
         selectedReproParity: "0",
         calvingParities: [makeCalvingParity(1)],
+        productionLactations: [makeProductionLactation(1)],
+        selectedProductionParity: "1",
       },
     });
   }
@@ -273,6 +315,64 @@ function syncDamCalvesInHerd(animals, dam) {
   });
 
   return nextAnimals.sort(sortByTag);
+}
+
+function firstRecordableFriday(calvingDate) {
+  const base = parseDisplayDate(calvingDate);
+  if (!base) return "";
+  for (let i = 0; i <= 14; i += 1) {
+    const d = new Date(base);
+    d.setDate(d.getDate() + i);
+    const candidate = formatDateDisplay(d);
+    const gap = daysBetween(calvingDate, candidate);
+    if (d.getDay() === 5 && gap > 5) return candidate;
+  }
+  return "";
+}
+
+function getNextFridayRecordDate(lactation) {
+  const existing = lactation?.fridayRecords || [];
+  if (!existing.length) return firstRecordableFriday(lactation?.calvingDate || "");
+  const lastDate = existing[existing.length - 1]?.date || "";
+  return lastDate ? addDays(lastDate, 7) : "";
+}
+
+function recalcFridayRecord(record) {
+  const hasMilkEntry = record.morningMilk !== "" || record.eveningMilk !== "";
+  const total = Number(record.morningMilk || 0) + Number(record.eveningMilk || 0);
+  return { ...record, totalDailyYield: hasMilkEntry ? String(total) : record.totalDailyYield || "" };
+}
+
+function computeProductionMetrics(lactation) {
+  if (!lactation) return { lactationLength: 0, totalLactationMilk: 0, standardLactationMilk: 0, peakYield: 0 };
+  const calvingDate = lactation.calvingDate || "";
+  const dryDate = lactation.dryDate || "";
+  const lactationLength = calvingDate && dryDate ? daysBetween(calvingDate, dryDate) + 1 : 0;
+
+  if (lactation.entryMode === "Manual") {
+    return {
+      lactationLength,
+      totalLactationMilk: Number(lactation.manualSummary.totalLactationMilk || 0),
+      standardLactationMilk: Number(lactation.manualSummary.standardLactationMilk || 0),
+      peakYield: Number(lactation.manualSummary.peakYield || 0),
+    };
+  }
+
+  const records = [...(lactation.fridayRecords || [])].filter((r) => r.date);
+  let total = 0;
+  let standard = 0;
+  let peak = 0;
+  let standardUsed = 0;
+  records.forEach((r, index) => {
+    const milk = Number(r.totalDailyYield || 0);
+    peak = Math.max(peak, milk);
+    const daysBlock = index === 0 && calvingDate && r.date === firstRecordableFriday(calvingDate) ? daysBetween(calvingDate, r.date) + 7 : 7;
+    total += milk * daysBlock;
+    const stdDays = Math.max(0, Math.min(daysBlock, 305 - standardUsed));
+    standardUsed += stdDays;
+    standard += milk * stdDays;
+  });
+  return { lactationLength, totalLactationMilk: total, standardLactationMilk: standard, peakYield: peak };
 }
 
 function Section({ title, children }) {
@@ -373,6 +473,9 @@ export default function AnimalDataRecordingApp() {
   const selectedAnimal = normalizedAnimals.find((a) => a.id === selectedId) || null;
   const selectedReproParity =
     selectedAnimal?.femaleDetails?.reproductionParities?.find((p) => p.parityNo === selectedAnimal?.femaleDetails?.selectedReproParity) || null;
+  const selectedLactation =
+    selectedAnimal?.femaleDetails?.productionLactations?.find((l) => l.parityNo === selectedAnimal?.femaleDetails?.selectedProductionParity) || null;
+  const productionMetrics = computeProductionMetrics(selectedLactation);
 
   function handleFormStatusChange(status) {
     setNewAnimal((s) => normalizeAnimalFormData({ ...s, status }));
@@ -526,13 +629,18 @@ export default function AnimalDataRecordingApp() {
   }
 
   function addCalvingParity() {
-    patchSelected((a) => ({
-      ...a,
-      femaleDetails: {
-        ...a.femaleDetails,
-        calvingParities: [...a.femaleDetails.calvingParities, makeCalvingParity(a.femaleDetails.calvingParities.length + 1)],
-      },
-    }));
+    patchSelected((a) => {
+      const nextNo = String(a.femaleDetails.calvingParities.length + 1);
+      const prodExists = a.femaleDetails.productionLactations.some((l) => l.parityNo === nextNo);
+      return {
+        ...a,
+        femaleDetails: {
+          ...a.femaleDetails,
+          calvingParities: [...a.femaleDetails.calvingParities, makeCalvingParity(nextNo)],
+          productionLactations: prodExists ? a.femaleDetails.productionLactations : [...a.femaleDetails.productionLactations, makeProductionLactation(nextNo)],
+        },
+      };
+    });
   }
 
   function removeCalvingParity() {
@@ -545,6 +653,67 @@ export default function AnimalDataRecordingApp() {
     }));
   }
 
+  function selectProductionParity(value) {
+    patchSelected((a) => ({
+      ...a,
+      femaleDetails: { ...a.femaleDetails, selectedProductionParity: String(value) },
+    }));
+  }
+
+  function updateSelectedLactation(key, value) {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedProductionParity;
+      const lactations = a.femaleDetails.productionLactations.map((l) =>
+        l.parityNo === currentParity ? { ...l, [key]: value } : l
+      );
+      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
+    });
+  }
+
+  function updateManualSummary(key, value) {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedProductionParity;
+      const lactations = a.femaleDetails.productionLactations.map((l) =>
+        l.parityNo === currentParity ? { ...l, manualSummary: { ...l.manualSummary, [key]: value } } : l
+      );
+      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
+    });
+  }
+
+  function addFridayRecord() {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedProductionParity;
+      const lactations = a.femaleDetails.productionLactations.map((l) =>
+        l.parityNo === currentParity
+          ? { ...l, fridayRecords: [...l.fridayRecords, makeFridayRecord(getNextFridayRecordDate(l))] }
+          : l
+      );
+      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
+    });
+  }
+
+  function removeFridayRecord() {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedProductionParity;
+      const lactations = a.femaleDetails.productionLactations.map((l) =>
+        l.parityNo === currentParity ? { ...l, fridayRecords: l.fridayRecords.slice(0, -1) } : l
+      );
+      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
+    });
+  }
+
+  function updateFridayRecord(idx, key, value) {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedProductionParity;
+      const lactations = a.femaleDetails.productionLactations.map((l) => {
+        if (l.parityNo !== currentParity) return l;
+        const records = l.fridayRecords.map((r, i) => i === idx ? recalcFridayRecord({ ...r, [key]: value }) : r);
+        return { ...l, fridayRecords: records };
+      });
+      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
+    });
+  }
+
   const currentList = herdView === "current" ? filteredCurrentAnimals : filteredArchivedAnimals;
 
   return (
@@ -554,7 +723,7 @@ export default function AnimalDataRecordingApp() {
           <div className="topbar">
             <div>
               <div className="title">Buffalo Animal Data Recording App</div>
-              <div className="subtitle">Phase 2.2 patch · calf sire auto-fill, auto calf creation, pedigree auto-linking</div>
+              <div className="subtitle">Phase 2.3 patch · production tab, Friday records, first recordable Friday rule</div>
             </div>
             <button className="primary-btn" onClick={() => setShowAdd(true)}>Add Animal</button>
           </div>
@@ -721,6 +890,59 @@ export default function AnimalDataRecordingApp() {
                       <button className="primary-btn" onClick={addCalvingParity}>Add calving parity</button>
                       <button className="secondary-btn" onClick={removeCalvingParity}>Remove last parity</button>
                     </div>
+                  </div>
+                )}
+
+                {detailTab === "production" && selectedLactation && (
+                  <div className="stack-gap">
+                    <Grid>
+                      <SelectField
+                        label="Select parity"
+                        value={selectedAnimal.femaleDetails.selectedProductionParity}
+                        onChange={selectProductionParity}
+                        options={selectedAnimal.femaleDetails.productionLactations.map((l) => l.parityNo)}
+                      />
+                      <TextField label="Calving date" value={selectedLactation.calvingDate || selectedAnimal.femaleDetails.calvingParities.find((c) => c.parityNo === selectedLactation.parityNo)?.calvingDate || ""} onChange={() => {}} readOnly />
+                      <TextField label="Dry date" value={selectedLactation.dryDate || ""} onChange={(v) => updateSelectedLactation("dryDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
+                      <SelectField label="Entry mode" value={selectedLactation.entryMode || "Manual"} onChange={(v) => updateSelectedLactation("entryMode", v)} options={ENTRY_MODES} />
+                    </Grid>
+
+                    {selectedLactation.entryMode === "Manual" ? (
+                      <Grid>
+                        <TextField label="Total lactation milk" value={selectedLactation.manualSummary.totalLactationMilk || ""} onChange={(v) => updateManualSummary("totalLactationMilk", v)} />
+                        <TextField label="Standard lactation milk" value={selectedLactation.manualSummary.standardLactationMilk || ""} onChange={(v) => updateManualSummary("standardLactationMilk", v)} />
+                        <TextField label="Peak yield" value={selectedLactation.manualSummary.peakYield || ""} onChange={(v) => updateManualSummary("peakYield", v)} />
+                      </Grid>
+                    ) : (
+                      <div className="stack-gap">
+                        <div className="subsection-label">First recordable Friday: {firstRecordableFriday(selectedLactation.calvingDate || selectedAnimal.femaleDetails.calvingParities.find((c) => c.parityNo === selectedLactation.parityNo)?.calvingDate || "") || "—"}</div>
+                        {(selectedLactation.fridayRecords || []).length === 0 && <div className="empty-note">No Friday records yet.</div>}
+                        {(selectedLactation.fridayRecords || []).map((rec, idx) => (
+                          <div key={`fr-${idx}`} className="mini-card">
+                            <Grid>
+                              <TextField label={`Friday ${idx + 1} date`} value={rec.date || ""} onChange={() => {}} readOnly />
+                              <TextField label="Morning milk" value={rec.morningMilk || ""} onChange={(v) => updateFridayRecord(idx, "morningMilk", v)} />
+                              <TextField label="Evening milk" value={rec.eveningMilk || ""} onChange={(v) => updateFridayRecord(idx, "eveningMilk", v)} />
+                              <TextField label="Total Daily Yield" value={rec.totalDailyYield || ""} onChange={() => {}} readOnly />
+                              <TextField label="Fat %" value={rec.fatPct || ""} onChange={(v) => updateFridayRecord(idx, "fatPct", v)} />
+                              <TextField label="SNF %" value={rec.snfPct || ""} onChange={(v) => updateFridayRecord(idx, "snfPct", v)} />
+                              <TextField label="TS %" value={rec.tsPct || ""} onChange={(v) => updateFridayRecord(idx, "tsPct", v)} />
+                            </Grid>
+                          </div>
+                        ))}
+                        <div className="action-row">
+                          <button className="primary-btn" onClick={addFridayRecord}>Add Friday record</button>
+                          <button className="secondary-btn" onClick={removeFridayRecord}>Remove last Friday</button>
+                        </div>
+                      </div>
+                    )}
+
+                    <Grid>
+                      <TextField label="Lactation length (days)" value={String(productionMetrics.lactationLength || "")} onChange={() => {}} readOnly />
+                      <TextField label="Total lactation milk" value={String(productionMetrics.totalLactationMilk || "")} onChange={() => {}} readOnly />
+                      <TextField label="Standard lactation milk" value={String(productionMetrics.standardLactationMilk || "")} onChange={() => {}} readOnly />
+                      <TextField label="Peak yield" value={String(productionMetrics.peakYield || "")} onChange={() => {}} readOnly />
+                    </Grid>
                   </div>
                 )}
               </Section>
