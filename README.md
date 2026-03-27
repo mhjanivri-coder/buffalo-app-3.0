@@ -1,3 +1,3 @@
-# Patched Add Animal Build
+# Phase 2.1 patch
 
-This version fixes the Add Animal button by rendering the form and saving basic herd records.
+Adds female tabs: Pedigree, Reproduction, Calving.

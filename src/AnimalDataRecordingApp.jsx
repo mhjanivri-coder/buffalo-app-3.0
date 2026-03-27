@@ -3,6 +3,8 @@ import React, { useMemo, useState } from "react";
 const BREEDS = ["Murrah buffalo", "Nili-Ravi buffalo"];
 const SEX_OPTIONS = ["Female", "Male"];
 const STATUS_OPTIONS = ["Active (present in herd)", "Dead", "Culled"];
+const FEMALE_TABS = ["pedigree", "reproduction", "calving"];
+const AI_RESULTS = ["Pending", "Negative", "Conceived"];
 const COLOSTRUM_DAYS = 5;
 
 const emptyAnimal = {
@@ -17,6 +19,45 @@ const emptyAnimal = {
   isBreedingBull: "No",
   breedingSet: "",
 };
+
+const emptyPedigree = {
+  sire: "",
+  dam: "",
+  sireSire: "",
+  sireDam: "",
+  damSire: "",
+  damDam: "",
+  sireSireSire: "",
+  sireSireDam: "",
+  sireDamSire: "",
+  sireDamDam: "",
+  damSireSire: "",
+  damSireDam: "",
+  damDamSire: "",
+  damDamDam: "",
+};
+
+function makeReproParity(parityNo) {
+  return {
+    parityNo: String(parityNo),
+    conceptionDate: "",
+    expectedCalvingDate: "",
+    remarks: "",
+    aiRecords: [],
+  };
+}
+
+function makeCalvingParity(parityNo) {
+  return {
+    parityNo: String(parityNo),
+    calvingDate: "",
+    calfSex: "",
+    calfTag: "",
+    calfSire: "",
+    calvingOutcome: "Normal calving",
+    remarks: "",
+  };
+}
 
 function parseDisplayDate(value) {
   if (!value || typeof value !== "string") return null;
@@ -41,6 +82,14 @@ function formatDateDisplay(date) {
 function normalizeDisplayDate(value) {
   const dt = parseDisplayDate(value);
   return dt ? formatDateDisplay(dt) : value;
+}
+
+function addDays(dateStr, days) {
+  const dt = parseDisplayDate(dateStr);
+  if (!dt) return "";
+  const copy = new Date(dt);
+  copy.setDate(copy.getDate() + days);
+  return formatDateDisplay(copy);
 }
 
 function normalizeRomanInput(value) {
@@ -88,6 +137,25 @@ function sortByTag(a, b) {
   return String(a.tagNo).localeCompare(String(b.tagNo), undefined, { numeric: true, sensitivity: "base" });
 }
 
+function withDefaults(animal) {
+  return {
+    ...animal,
+    femaleDetails: {
+      pedigree: { ...emptyPedigree, ...(animal.femaleDetails?.pedigree || {}) },
+      reproductionParities: animal.femaleDetails?.reproductionParities?.length
+        ? animal.femaleDetails.reproductionParities.map((p) => ({
+            ...p,
+            aiRecords: (p.aiRecords || []).map((r) => ({ ...r })),
+          }))
+        : [makeReproParity(0)],
+      selectedReproParity: animal.femaleDetails?.selectedReproParity || "0",
+      calvingParities: animal.femaleDetails?.calvingParities?.length
+        ? animal.femaleDetails.calvingParities.map((p) => ({ ...p }))
+        : [makeCalvingParity(1)],
+    },
+  };
+}
+
 function Section({ title, children }) {
   return (
     <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md">
@@ -110,15 +178,24 @@ function TextField({ label, value, onChange, readOnly = false, placeholder = "" 
   );
 }
 
-function SelectField({ label, value, onChange, options }) {
+function SelectField({ label, value, onChange, options, disabled = false }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
         {options.map((o) => (
           <option key={o} value={o}>{o || "—"}</option>
         ))}
       </select>
+    </label>
+  );
+}
+
+function TextAreaField({ label, value, onChange, rows = 3 }) {
+  return (
+    <label className="field textarea-field">
+      <span>{label}</span>
+      <textarea rows={rows} value={value} onChange={(e) => onChange(e.target.value)} />
     </label>
   );
 }
@@ -138,10 +215,12 @@ export default function AnimalDataRecordingApp() {
   const [showAdd, setShowAdd] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [herdView, setHerdView] = useState("current");
+  const [detailTab, setDetailTab] = useState("pedigree");
   const [newAnimal, setNewAnimal] = useState({ ...emptyAnimal });
 
-  const activeAnimals = useMemo(() => animals.filter((a) => !isArchivedAnimal(a)), [animals]);
-  const archivedAnimals = useMemo(() => animals.filter((a) => isArchivedAnimal(a)), [animals]);
+  const normalizedAnimals = useMemo(() => animals.map(withDefaults), [animals]);
+  const activeAnimals = useMemo(() => normalizedAnimals.filter((a) => !isArchivedAnimal(a)), [normalizedAnimals]);
+  const archivedAnimals = useMemo(() => normalizedAnimals.filter((a) => isArchivedAnimal(a)), [normalizedAnimals]);
 
   const filteredCurrentAnimals = useMemo(() => {
     const q = search.toLowerCase();
@@ -172,7 +251,9 @@ export default function AnimalDataRecordingApp() {
     };
   }, [activeAnimals]);
 
-  const selectedAnimal = animals.find((a) => a.id === selectedId) || null;
+  const selectedAnimal = normalizedAnimals.find((a) => a.id === selectedId) || null;
+  const selectedReproParity =
+    selectedAnimal?.femaleDetails?.reproductionParities?.find((p) => p.parityNo === selectedAnimal?.femaleDetails?.selectedReproParity) || null;
 
   function handleFormStatusChange(status) {
     setNewAnimal((s) => normalizeAnimalFormData({ ...s, status }));
@@ -188,21 +269,132 @@ export default function AnimalDataRecordingApp() {
       return;
     }
     const prepared = normalizeAnimalFormData(newAnimal);
-    const item = {
+    const item = withDefaults({
       id: Date.now(),
       ...prepared,
       preCalvingLifecycle: prepared.category === "Female" ? "Heifer" : "",
       firstCalvingDate: "",
-    };
+    });
     setAnimals((prev) => [item, ...prev].sort(sortByTag));
     setSelectedId(item.id);
     setNewAnimal({ ...emptyAnimal });
     setShowAdd(false);
   }
 
-  function currentList() {
-    return herdView === "current" ? filteredCurrentAnimals : filteredArchivedAnimals;
+  function patchSelected(fn) {
+    setAnimals((prev) => prev.map((a) => (a.id === selectedId ? fn(withDefaults(a)) : a)));
   }
+
+  function updateFemalePedigree(key, value) {
+    patchSelected((a) => ({
+      ...a,
+      femaleDetails: {
+        ...a.femaleDetails,
+        pedigree: { ...a.femaleDetails.pedigree, [key]: value },
+      },
+    }));
+  }
+
+  function updateSelectedRepro(key, value) {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedReproParity;
+      const parities = a.femaleDetails.reproductionParities.map((p) =>
+        p.parityNo === currentParity
+          ? { ...p, [key]: value, expectedCalvingDate: key === "conceptionDate" ? addDays(value, 310) : p.expectedCalvingDate }
+          : p
+      );
+      return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
+    });
+  }
+
+  function addAIRecord() {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedReproParity;
+      const parities = a.femaleDetails.reproductionParities.map((p) =>
+        p.parityNo === currentParity
+          ? { ...p, aiRecords: [...p.aiRecords, { aiDate: "", aiBullNo: "", aiSetNo: "", result: "Pending" }] }
+          : p
+      );
+      return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
+    });
+  }
+
+  function removeAIRecord() {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedReproParity;
+      const parities = a.femaleDetails.reproductionParities.map((p) =>
+        p.parityNo === currentParity ? { ...p, aiRecords: p.aiRecords.slice(0, -1) } : p
+      );
+      return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
+    });
+  }
+
+  function updateAIRecord(idx, key, value) {
+    patchSelected((a) => {
+      const currentParity = a.femaleDetails.selectedReproParity;
+      const parities = a.femaleDetails.reproductionParities.map((p) => {
+        if (p.parityNo !== currentParity) return p;
+        const nextRecords = p.aiRecords.map((r, i) => (i === idx ? { ...r, [key]: value } : r));
+        return { ...p, aiRecords: nextRecords };
+      });
+      return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
+    });
+  }
+
+  function incrementReproParity() {
+    patchSelected((a) => {
+      const current = Number(a.femaleDetails.selectedReproParity || 0) + 1;
+      const next = String(current);
+      const exists = a.femaleDetails.reproductionParities.some((p) => p.parityNo === next);
+      return {
+        ...a,
+        femaleDetails: {
+          ...a.femaleDetails,
+          selectedReproParity: next,
+          reproductionParities: exists ? a.femaleDetails.reproductionParities : [...a.femaleDetails.reproductionParities, makeReproParity(next)],
+        },
+      };
+    });
+  }
+
+  function decrementReproParity() {
+    patchSelected((a) => ({
+      ...a,
+      femaleDetails: {
+        ...a.femaleDetails,
+        selectedReproParity: String(Math.max(0, Number(a.femaleDetails.selectedReproParity || 0) - 1)),
+      },
+    }));
+  }
+
+  function updateCalvingParity(idx, key, value) {
+    patchSelected((a) => {
+      const next = a.femaleDetails.calvingParities.map((p, i) => (i === idx ? { ...p, [key]: value } : p));
+      return { ...a, femaleDetails: { ...a.femaleDetails, calvingParities: next } };
+    });
+  }
+
+  function addCalvingParity() {
+    patchSelected((a) => ({
+      ...a,
+      femaleDetails: {
+        ...a.femaleDetails,
+        calvingParities: [...a.femaleDetails.calvingParities, makeCalvingParity(a.femaleDetails.calvingParities.length + 1)],
+      },
+    }));
+  }
+
+  function removeCalvingParity() {
+    patchSelected((a) => ({
+      ...a,
+      femaleDetails: {
+        ...a.femaleDetails,
+        calvingParities: a.femaleDetails.calvingParities.length > 1 ? a.femaleDetails.calvingParities.slice(0, -1) : a.femaleDetails.calvingParities,
+      },
+    }));
+  }
+
+  const currentList = herdView === "current" ? filteredCurrentAnimals : filteredArchivedAnimals;
 
   return (
     <div className="app-shell">
@@ -211,7 +403,7 @@ export default function AnimalDataRecordingApp() {
           <div className="topbar">
             <div>
               <div className="title">Buffalo Animal Data Recording App</div>
-              <div className="subtitle">Murrah Farm and Nili-Ravi Farm · patched Add Animal form · deploy-ready Vite project</div>
+              <div className="subtitle">Phase 2.1 patch · female tabs added: Pedigree, Reproduction, Calving</div>
             </div>
             <button className="primary-btn" onClick={() => setShowAdd(true)}>Add Animal</button>
           </div>
@@ -237,10 +429,7 @@ export default function AnimalDataRecordingApp() {
               {newAnimal.status !== "Active (present in herd)" && (
                 <>
                   <TextField label="Date of Death / Culling" value={newAnimal.exitDate || ""} onChange={(v) => setNewAnimal((s) => ({ ...s, exitDate: normalizeDisplayDate(v) }))} placeholder="dd/mm/yyyy" />
-                  <label className="field textarea-field">
-                    <span>Reason of Death / Culling</span>
-                    <textarea rows="3" value={newAnimal.exitReason || ""} onChange={(e) => setNewAnimal((s) => ({ ...s, exitReason: e.target.value }))} />
-                  </label>
+                  <TextAreaField label="Reason of Death / Culling" value={newAnimal.exitReason || ""} onChange={(v) => setNewAnimal((s) => ({ ...s, exitReason: v }))} />
                 </>
               )}
             </Grid>
@@ -270,9 +459,9 @@ export default function AnimalDataRecordingApp() {
               <button className={herdView === "archive" ? "primary-btn" : "secondary-btn"} onClick={() => setHerdView("archive")}>Archive</button>
             </div>
             <div className="list-wrap">
-              {currentList().length === 0 && <div className="empty-note">No animals found.</div>}
-              {currentList().map((animal) => (
-                <button key={animal.id} className={`animal-card ${selectedId === animal.id ? "selected" : ""}`} onClick={() => setSelectedId(animal.id)}>
+              {currentList.length === 0 && <div className="empty-note">No animals found.</div>}
+              {currentList.map((animal) => (
+                <button key={animal.id} className={`animal-card ${selectedId === animal.id ? "selected" : ""}`} onClick={() => { setSelectedId(animal.id); setDetailTab("pedigree"); }}>
                   <div className="animal-title">{animal.tagNo}</div>
                   <div className="animal-sub">
                     {animal.breed} · {animal.category === "Female" ? getFemaleLifecycle(animal) : animal.isBreedingBull === "Yes" ? `Breeding Bull (${animal.breedingSet || "Set blank"})` : "Male"}
@@ -282,27 +471,110 @@ export default function AnimalDataRecordingApp() {
             </div>
           </Section>
 
-          <Section title="Selected Animal Preview">
-            {!selectedAnimal && <div className="empty-note">No animal selected.</div>}
-            {selectedAnimal && (
-              <div className="preview-grid">
-                <div><strong>Tag No.:</strong> {selectedAnimal.tagNo}</div>
-                <div><strong>Breed:</strong> {selectedAnimal.breed}</div>
-                <div><strong>DOB:</strong> {selectedAnimal.dob || "—"}</div>
-                <div><strong>Sex:</strong> {selectedAnimal.category}</div>
-                <div><strong>Status:</strong> {selectedAnimal.status}</div>
-                <div><strong>Identification Mark:</strong> {selectedAnimal.identificationMark || "—"}</div>
-                {selectedAnimal.category === "Female" && <div><strong>Current category:</strong> {getFemaleLifecycle(selectedAnimal)}</div>}
-                {selectedAnimal.category === "Male" && <div><strong>Breeding bull:</strong> {selectedAnimal.isBreedingBull === "Yes" ? `Yes (${selectedAnimal.breedingSet || "Set blank"})` : "No"}</div>}
-                {selectedAnimal.status !== "Active (present in herd)" && (
-                  <>
-                    <div><strong>Exit date:</strong> {selectedAnimal.exitDate || "—"}</div>
-                    <div><strong>Exit reason:</strong> {selectedAnimal.exitReason || "—"}</div>
-                  </>
+          <div className="right-stack">
+            <Section title="Selected Animal Preview">
+              {!selectedAnimal && <div className="empty-note">No animal selected.</div>}
+              {selectedAnimal && (
+                <div className="preview-grid">
+                  <div><strong>Tag No.:</strong> {selectedAnimal.tagNo}</div>
+                  <div><strong>Breed:</strong> {selectedAnimal.breed}</div>
+                  <div><strong>DOB:</strong> {selectedAnimal.dob || "—"}</div>
+                  <div><strong>Sex:</strong> {selectedAnimal.category}</div>
+                  <div><strong>Status:</strong> {selectedAnimal.status}</div>
+                  <div><strong>Identification Mark:</strong> {selectedAnimal.identificationMark || "—"}</div>
+                  {selectedAnimal.category === "Female" && <div><strong>Current category:</strong> {getFemaleLifecycle(selectedAnimal)}</div>}
+                  {selectedAnimal.category === "Male" && <div><strong>Breeding bull:</strong> {selectedAnimal.isBreedingBull === "Yes" ? `Yes (${selectedAnimal.breedingSet || "Set blank"})` : "No"}</div>}
+                </div>
+              )}
+            </Section>
+
+            {selectedAnimal?.category === "Female" && (
+              <Section title="Female Tabs">
+                <div className="tab-row">
+                  {FEMALE_TABS.map((tab) => (
+                    <button key={tab} className={detailTab === tab ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setDetailTab(tab)}>
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+
+                {detailTab === "pedigree" && (
+                  <Grid>
+                    <TextField label="Sire" value={selectedAnimal.femaleDetails.pedigree.sire} onChange={(v) => updateFemalePedigree("sire", v)} />
+                    <TextField label="Dam" value={selectedAnimal.femaleDetails.pedigree.dam} onChange={(v) => updateFemalePedigree("dam", v)} />
+                    <TextField label="Sire's sire" value={selectedAnimal.femaleDetails.pedigree.sireSire} onChange={(v) => updateFemalePedigree("sireSire", v)} />
+                    <TextField label="Sire's dam" value={selectedAnimal.femaleDetails.pedigree.sireDam} onChange={(v) => updateFemalePedigree("sireDam", v)} />
+                    <TextField label="Dam's sire" value={selectedAnimal.femaleDetails.pedigree.damSire} onChange={(v) => updateFemalePedigree("damSire", v)} />
+                    <TextField label="Dam's dam" value={selectedAnimal.femaleDetails.pedigree.damDam} onChange={(v) => updateFemalePedigree("damDam", v)} />
+                    <TextField label="Great-grandsire (SSS)" value={selectedAnimal.femaleDetails.pedigree.sireSireSire} onChange={(v) => updateFemalePedigree("sireSireSire", v)} />
+                    <TextField label="Great-granddam (SSD)" value={selectedAnimal.femaleDetails.pedigree.sireSireDam} onChange={(v) => updateFemalePedigree("sireSireDam", v)} />
+                    <TextField label="Great-grandsire (SDS)" value={selectedAnimal.femaleDetails.pedigree.sireDamSire} onChange={(v) => updateFemalePedigree("sireDamSire", v)} />
+                    <TextField label="Great-granddam (SDD)" value={selectedAnimal.femaleDetails.pedigree.sireDamDam} onChange={(v) => updateFemalePedigree("sireDamDam", v)} />
+                    <TextField label="Great-grandsire (DSS)" value={selectedAnimal.femaleDetails.pedigree.damSireSire} onChange={(v) => updateFemalePedigree("damSireSire", v)} />
+                    <TextField label="Great-granddam (DSD)" value={selectedAnimal.femaleDetails.pedigree.damSireDam} onChange={(v) => updateFemalePedigree("damSireDam", v)} />
+                    <TextField label="Great-grandsire (DDS)" value={selectedAnimal.femaleDetails.pedigree.damDamSire} onChange={(v) => updateFemalePedigree("damDamSire", v)} />
+                    <TextField label="Great-granddam (DDD)" value={selectedAnimal.femaleDetails.pedigree.damDamDam} onChange={(v) => updateFemalePedigree("damDamDam", v)} />
+                  </Grid>
                 )}
-              </div>
+
+                {detailTab === "reproduction" && selectedReproParity && (
+                  <div className="stack-gap">
+                    <div className="parity-head">
+                      <div className="parity-controls">
+                        <button className="secondary-btn square-btn" onClick={decrementReproParity}>−</button>
+                        <div className="parity-box">{selectedAnimal.femaleDetails.selectedReproParity}</div>
+                        <button className="secondary-btn square-btn" onClick={incrementReproParity}>+</button>
+                      </div>
+                    </div>
+                    <Grid>
+                      <TextField label="Conception date" value={selectedReproParity.conceptionDate || ""} onChange={(v) => updateSelectedRepro("conceptionDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
+                      <TextField label="Expected calving date" value={selectedReproParity.expectedCalvingDate || ""} onChange={() => {}} readOnly />
+                      <TextAreaField label="Remarks" value={selectedReproParity.remarks || ""} onChange={(v) => updateSelectedRepro("remarks", v)} />
+                    </Grid>
+
+                    <div className="subsection-label">AI records</div>
+                    {(selectedReproParity.aiRecords || []).length === 0 && <div className="empty-note">No AI records yet.</div>}
+                    {(selectedReproParity.aiRecords || []).map((rec, idx) => (
+                      <div key={`ai-${idx}`} className="mini-card">
+                        <Grid>
+                          <TextField label={`AI ${idx + 1} date`} value={rec.aiDate || ""} onChange={(v) => updateAIRecord(idx, "aiDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
+                          <TextField label="Bull No." value={rec.aiBullNo || ""} onChange={(v) => updateAIRecord(idx, "aiBullNo", v)} />
+                          <TextField label="Set No." value={rec.aiSetNo || ""} onChange={(v) => updateAIRecord(idx, "aiSetNo", v)} />
+                          <SelectField label="Result" value={rec.result || "Pending"} onChange={(v) => updateAIRecord(idx, "result", v)} options={AI_RESULTS} />
+                        </Grid>
+                      </div>
+                    ))}
+                    <div className="action-row">
+                      <button className="primary-btn" onClick={addAIRecord}>Add AI record</button>
+                      <button className="secondary-btn" onClick={removeAIRecord}>Remove last AI</button>
+                    </div>
+                  </div>
+                )}
+
+                {detailTab === "calving" && (
+                  <div className="stack-gap">
+                    {selectedAnimal.femaleDetails.calvingParities.map((cp, idx) => (
+                      <div key={`calving-${idx}`} className="mini-card">
+                        <div className="subsection-label">Calving parity {cp.parityNo}</div>
+                        <Grid>
+                          <TextField label="Calving date" value={cp.calvingDate || ""} onChange={(v) => updateCalvingParity(idx, "calvingDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
+                          <SelectField label="Calf sex" value={cp.calfSex || ""} onChange={(v) => updateCalvingParity(idx, "calfSex", v)} options={["", ...SEX_OPTIONS]} />
+                          <TextField label="Calf tag no." value={cp.calfTag || ""} onChange={(v) => updateCalvingParity(idx, "calfTag", v)} />
+                          <TextField label="Calf sire" value={cp.calfSire || ""} onChange={(v) => updateCalvingParity(idx, "calfSire", v)} />
+                          <SelectField label="Calving outcome" value={cp.calvingOutcome || "Normal calving"} onChange={(v) => updateCalvingParity(idx, "calvingOutcome", v)} options={["Normal calving", "Stillbirth", "Abortion"]} />
+                          <TextAreaField label="Remarks" value={cp.remarks || ""} onChange={(v) => updateCalvingParity(idx, "remarks", v)} />
+                        </Grid>
+                      </div>
+                    ))}
+                    <div className="action-row">
+                      <button className="primary-btn" onClick={addCalvingParity}>Add calving parity</button>
+                      <button className="secondary-btn" onClick={removeCalvingParity}>Remove last parity</button>
+                    </div>
+                  </div>
+                )}
+              </Section>
             )}
-          </Section>
+          </div>
         </div>
       </div>
     </div>
