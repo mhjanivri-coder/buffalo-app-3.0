@@ -1,3 +1,3 @@
-# Phase 2.8 patch
+# Phase 2.9 patch
 
-Adds stronger breeding-bull lineage matching using explicit sire fields when available, improved daughter summaries, archived-lineage continuity checks, and tighter breeding-set guidance.
+Adds stronger future-facing bull-to-progeny ID linkage, lineage backfill from existing pedigree text, propagation when breeding bull tag/set is edited, and improved bull lineage summaries.

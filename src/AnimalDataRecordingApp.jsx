@@ -105,6 +105,20 @@ function getFemaleLifecycle(animal) {
   if (days < COLOSTRUM_DAYS) return animal.preCalvingLifecycle === "Heifer" ? "Colostrum-Heifer" : "Colostrum";
   return animal.preCalvingLifecycle === "Heifer" ? "Dry" : "Milk";
 }
+
+function normalizeLineageAcrossHerd(animals) {
+  return (animals || []).map((animal) => {
+    if (animal.category !== "Female" && animal.category !== "Male") return animal;
+    if (animal.id && animal.id.toString().startsWith("calf-")) return animal;
+    const inferred = inferLinkedSireFromStoredData(animal, animals);
+    if (!inferred.linkedSireTag) return animal;
+    return {
+      ...animal,
+      linkedSireTag: animal.linkedSireTag || inferred.linkedSireTag,
+      linkedSireSet: animal.linkedSireSet || inferred.linkedSireSet,
+    };
+  });
+}
 function sortByTag(a, b) {
   const an = Number(a.tagNo), bn = Number(b.tagNo);
   if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
@@ -184,6 +198,19 @@ function splitSireString(value) {
   if (!raw) return { bullNo: "", setNo: "" };
   const parts = raw.split("/").map((s) => s.trim()).filter(Boolean);
   return { bullNo: parts[0] || "", setNo: parts[1] || "" };
+}
+
+function inferLinkedSireFromStoredData(animal, allAnimals) {
+  const sireText = animal?.category === "Female"
+    ? animal.femaleDetails?.pedigree?.sire || ""
+    : animal?.maleDetails?.pedigree?.sire || "";
+  const parsed = splitSireString(sireText);
+  if (!parsed.bullNo) return { linkedSireTag: "", linkedSireSet: "" };
+  const matchingBull = (allAnimals || []).find((a) => a.category === "Male" && a.tagNo === parsed.bullNo);
+  return {
+    linkedSireTag: matchingBull?.tagNo || parsed.bullNo,
+    linkedSireSet: parsed.setNo || matchingBull?.breedingSet || "",
+  };
 }
 function bullLineageMatches(animal, bull) {
   if (!animal || !bull) return false;
@@ -361,7 +388,7 @@ export default function AnimalDataRecordingApp() {
   const [isEditingAnimal, setIsEditingAnimal] = useState(false);
   const [editAnimalForm, setEditAnimalForm] = useState({ ...emptyAnimal });
 
-  const normalizedAnimals = useMemo(() => animals.map(withDefaults), [animals]);
+  const normalizedAnimals = useMemo(() => normalizeLineageAcrossHerd(animals.map(withDefaults)), [animals]);
   const activeAnimals = useMemo(() => normalizedAnimals.filter((a) => !isArchivedAnimal(a)), [normalizedAnimals]);
   const archivedAnimals = useMemo(() => normalizedAnimals.filter((a) => isArchivedAnimal(a)), [normalizedAnimals]);
   const filteredCurrentAnimals = useMemo(() => {
@@ -406,7 +433,7 @@ export default function AnimalDataRecordingApp() {
       femaleDetails: prepared.category === "Female" ? { pedigree: { ...emptyPedigree }, reproductionParities: [makeReproParity(0)], selectedReproParity: "0", calvingParities: [makeCalvingParity(1)], productionLactations: [makeProductionLactation(1)], selectedProductionParity: "1", historyMeta: { reasonForCulling: "", bookValue: "" }, health: defaultHealth() } : undefined,
       maleDetails: prepared.category === "Male" ? defaultMaleDetails() : undefined,
     });
-    setAnimals((prev) => [item, ...prev].sort(sortByTag));
+    setAnimals((prev) => normalizeLineageAcrossHerd([item, ...prev]).sort(sortByTag));
     setSelectedId(item.id);
     setShowAdd(false);
     setNewAnimal({ ...emptyAnimal });
@@ -430,7 +457,40 @@ export default function AnimalDataRecordingApp() {
   function saveEditedAnimal() {
     if (!selectedAnimal) return;
     const prepared = normalizeAnimalFormData(editAnimalForm);
-    setAnimals((prev) => prev.map((a) => a.id === selectedAnimal.id ? withDefaults({ ...a, ...prepared }) : a).sort(sortByTag));
+    setAnimals((prev) => {
+      const oldTag = selectedAnimal.tagNo;
+      const oldSet = selectedAnimal.breedingSet || "";
+      const next = prev.map((a) => {
+        if (a.id === selectedAnimal.id) return withDefaults({ ...a, ...prepared });
+        if (selectedAnimal.category === "Male" && a.linkedSireTag === oldTag) {
+          const nextSireText = prepared.tagNo && prepared.breedingSet ? `${prepared.tagNo}/${prepared.breedingSet}` : prepared.tagNo || "";
+          if (a.category === "Female") {
+            return withDefaults({
+              ...a,
+              linkedSireTag: prepared.tagNo || a.linkedSireTag,
+              linkedSireSet: prepared.breedingSet || "",
+              femaleDetails: {
+                ...a.femaleDetails,
+                pedigree: { ...a.femaleDetails?.pedigree, sire: nextSireText || a.femaleDetails?.pedigree?.sire || "" },
+              },
+            });
+          }
+          if (a.category === "Male") {
+            return withDefaults({
+              ...a,
+              linkedSireTag: prepared.tagNo || a.linkedSireTag,
+              linkedSireSet: prepared.breedingSet || "",
+              maleDetails: {
+                ...a.maleDetails,
+                pedigree: { ...a.maleDetails?.pedigree, sire: nextSireText || a.maleDetails?.pedigree?.sire || "" },
+              },
+            });
+          }
+        }
+        return a;
+      });
+      return normalizeLineageAcrossHerd(next).sort(sortByTag);
+    });
     setIsEditingAnimal(false);
   }
   function goToNextTab() {
@@ -463,7 +523,8 @@ export default function AnimalDataRecordingApp() {
         updatedSelected = fn(withDefaults(a));
         return updatedSelected;
       });
-      return updatedSelected?.category === "Female" ? syncDamCalvesInHerd(mapped, updatedSelected) : mapped;
+      const nextMapped = updatedSelected?.category === "Female" ? syncDamCalvesInHerd(mapped, updatedSelected) : mapped;
+      return normalizeLineageAcrossHerd(nextMapped);
     });
   }
   function updateFemalePedigree(key, value) { patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, pedigree: { ...a.femaleDetails.pedigree, [key]: value } } })); }
@@ -787,6 +848,12 @@ export default function AnimalDataRecordingApp() {
                       <TextField label="Book value" value={selectedAnimal.femaleDetails.historyMeta.bookValue || ""} onChange={(v) => updateHistoryMeta("bookValue", v)} />
                       <TextField label="AFC (days)" value={computeCalvingMetrics(selectedAnimal, 1).afc || ""} onChange={() => {}} readOnly />
                     </Grid>
+                    <div className="stats-grid slim-stats">
+                      <StatCard title="Linked progenies" value={femaleProgenies.length + maleProgenies.length} />
+                      <StatCard title="Archived linked progenies" value={[...femaleProgenies, ...maleProgenies].filter((a) => isArchivedAnimal(a)).length} />
+                      <StatCard title="Daughters in milk" value={femaleProgenies.filter((a) => getFemaleLifecycle(a) === "Milk").length} />
+                      <StatCard title="Lineage mode" value={"ID + text"} />
+                    </div>
                     <div className="table-wrap">
                       <table className="history-table">
                         <thead><tr><th>Parity</th><th>Date Calved</th><th>GP</th><th>Sex of Calf</th><th>Tag No. of Calf</th><th>Date of 1st AI</th><th>Date of Conception</th><th>Bull No./Set No.</th><th>Total AI</th><th>Dry Date</th><th>TLMY</th><th>SLMY</th><th>LL</th><th>PY</th><th>SP</th><th>CI</th><th>Fat %</th><th>SNF %</th><th>TS %</th></tr></thead>
@@ -845,6 +912,7 @@ export default function AnimalDataRecordingApp() {
                           <tbody>{femaleProgenies.map((a) => <tr key={a.id}><td>{a.tagNo}</td><td>{a.dob || ""}</td><td>{a.breed}</td><td>{getFemaleLifecycle(a)}</td><td>{a.femaleDetails?.pedigree?.dam || ""}</td></tr>)}</tbody>
                         </table>
                         {femaleProgenies.length === 0 && <div className="empty-note">No female progenies linked yet.</div>}
+                        {femaleProgenies.length > 0 && <div className="helper-note">Future records now prefer explicit sire linkage over text-only matching.</div>}
                       </div>
                     )}
                     {maleProgenySubTab === "male" && (
@@ -854,6 +922,7 @@ export default function AnimalDataRecordingApp() {
                           <tbody>{maleProgenies.map((a) => <tr key={a.id}><td>{a.tagNo}</td><td>{a.dob || ""}</td><td>{a.breed}</td><td>{a.status}</td><td>{a.maleDetails?.pedigree?.dam || ""}</td></tr>)}</tbody>
                         </table>
                         {maleProgenies.length === 0 && <div className="empty-note">No male progenies linked yet.</div>}
+                        {maleProgenies.length > 0 && <div className="helper-note">Future records now prefer explicit sire linkage over text-only matching.</div>}
                       </div>
                     )}
                   </div>
