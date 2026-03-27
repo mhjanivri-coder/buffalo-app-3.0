@@ -1,3 +1,3 @@
-# Phase 2.1 patch
+# Phase 2.2 patch
 
-Adds female tabs: Pedigree, Reproduction, Calving.
+Adds calf sire auto-fill, auto calf creation, and pedigree auto-linking.

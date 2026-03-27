@@ -5,6 +5,7 @@ const SEX_OPTIONS = ["Female", "Male"];
 const STATUS_OPTIONS = ["Active (present in herd)", "Dead", "Culled"];
 const FEMALE_TABS = ["pedigree", "reproduction", "calving"];
 const AI_RESULTS = ["Pending", "Negative", "Conceived"];
+const CALVING_OUTCOMES = ["Normal calving", "Stillbirth", "Abortion"];
 const COLOSTRUM_DAYS = 5;
 
 const emptyAnimal = {
@@ -119,8 +120,17 @@ function normalizeAnimalFormData(form) {
 
 function getFemaleLifecycle(animal) {
   if (!animal || animal.category !== "Female") return animal?.category || "";
-  if (!animal.firstCalvingDate) return "Heifer";
-  const calving = parseDisplayDate(animal.firstCalvingDate);
+  const calvings = animal?.femaleDetails?.calvingParities || [];
+  const last = [...calvings]
+    .filter((p) => p.calvingDate && p.calvingOutcome === "Normal calving")
+    .sort((a, b) => {
+      const ad = parseDisplayDate(a.calvingDate);
+      const bd = parseDisplayDate(b.calvingDate);
+      if (!ad || !bd) return 0;
+      return bd.getTime() - ad.getTime();
+    })[0];
+  if (!last?.calvingDate) return "Heifer";
+  const calving = parseDisplayDate(last.calvingDate);
   if (!calving) return "Heifer";
   const today = new Date();
   const days = Math.max(0, Math.round((today.getTime() - calving.getTime()) / 86400000));
@@ -140,7 +150,7 @@ function sortByTag(a, b) {
 function withDefaults(animal) {
   return {
     ...animal,
-    femaleDetails: {
+    femaleDetails: animal.category === "Female" ? {
       pedigree: { ...emptyPedigree, ...(animal.femaleDetails?.pedigree || {}) },
       reproductionParities: animal.femaleDetails?.reproductionParities?.length
         ? animal.femaleDetails.reproductionParities.map((p) => ({
@@ -152,8 +162,117 @@ function withDefaults(animal) {
       calvingParities: animal.femaleDetails?.calvingParities?.length
         ? animal.femaleDetails.calvingParities.map((p) => ({ ...p }))
         : [makeCalvingParity(1)],
-    },
+    } : undefined,
+    maleDetails: animal.category === "Male" ? {
+      pedigree: { ...emptyPedigree, ...(animal.maleDetails?.pedigree || {}) },
+    } : undefined,
   };
+}
+
+function formatBullSet(aiRecord) {
+  if (!aiRecord) return "";
+  const bullNo = (aiRecord.aiBullNo || "").trim();
+  const setNo = (aiRecord.aiSetNo || "").trim();
+  if (bullNo && setNo) return `${bullNo}/${setNo}`;
+  return bullNo || setNo || "";
+}
+
+function getReproParityByNo(animal, parityNo) {
+  return animal?.femaleDetails?.reproductionParities?.find((p) => Number(p.parityNo) === Number(parityNo)) || null;
+}
+
+function getConceivedAIRecord(reproParity) {
+  if (!reproParity) return null;
+  const aiRecords = reproParity.aiRecords || [];
+  const conceived = aiRecords.find((r) => r.result === "Conceived");
+  if (conceived) return conceived;
+  if (reproParity.conceptionDate) {
+    const dated = aiRecords.find((r) => r.aiDate === reproParity.conceptionDate);
+    if (dated) return dated;
+  }
+  return aiRecords.length ? aiRecords[aiRecords.length - 1] : null;
+}
+
+function getCalfSireForCalving(animal, calvingParityNo) {
+  const sourceReproParity = Number(calvingParityNo) - 1;
+  if (sourceReproParity < 0) return "";
+  const reproParity = getReproParityByNo(animal, sourceReproParity);
+  return formatBullSet(getConceivedAIRecord(reproParity));
+}
+
+function buildAutoCalfAnimal(dam, calvingParity) {
+  if (!dam || dam.category !== "Female") return null;
+  if ((calvingParity?.calvingOutcome || "") !== "Normal calving") return null;
+  const calfTag = (calvingParity?.calfTag || "").trim();
+  const calfSex = calvingParity?.calfSex || "";
+  const calfDob = calvingParity?.calvingDate || "";
+  const calfSire = (calvingParity?.calfSire || getCalfSireForCalving(dam, calvingParity?.parityNo) || "").trim();
+  if (!calfTag || !calfSex || !calfDob) return null;
+
+  const base = {
+    id: `calf-${dam.id}-${calvingParity.parityNo}`,
+    tagNo: calfTag,
+    breed: dam.breed || "Nili-Ravi buffalo",
+    dob: calfDob,
+    category: calfSex === "Female" ? "Female" : "Male",
+    identificationMark: "",
+    status: "Active (present in herd)",
+    exitDate: "",
+    exitReason: "",
+    isBreedingBull: "No",
+    breedingSet: "",
+    linkedDamId: dam.id,
+    linkedCalvingParityNo: String(calvingParity.parityNo),
+    autoAddedFromBirth: true,
+    preCalvingLifecycle: "Heifer",
+  };
+
+  if (calfSex === "Female") {
+    return withDefaults({
+      ...base,
+      femaleDetails: {
+        pedigree: { ...emptyPedigree, dam: dam.tagNo || "", sire: calfSire },
+        reproductionParities: [makeReproParity(0)],
+        selectedReproParity: "0",
+        calvingParities: [makeCalvingParity(1)],
+      },
+    });
+  }
+
+  return withDefaults({
+    ...base,
+    maleDetails: {
+      pedigree: { ...emptyPedigree, dam: dam.tagNo || "", sire: calfSire },
+    },
+  });
+}
+
+function syncDamCalvesInHerd(animals, dam) {
+  if (!dam || dam.category !== "Female") return animals;
+  const calfRecords = (dam.femaleDetails?.calvingParities || [])
+    .map((cp) => buildAutoCalfAnimal(dam, cp))
+    .filter(Boolean);
+
+  let nextAnimals = animals.filter((animal) => {
+    if (!animal?.autoAddedFromBirth || animal?.linkedDamId !== dam.id) return true;
+    return calfRecords.some((calf) => calf.id === animal.id);
+  });
+
+  calfRecords.forEach((calf) => {
+    const idx = nextAnimals.findIndex((animal) => animal.id === calf.id || (animal.tagNo === calf.tagNo && animal.id !== dam.id));
+    if (idx >= 0) {
+      nextAnimals[idx] = withDefaults({
+        ...nextAnimals[idx],
+        ...calf,
+        femaleDetails: calf.category === "Female" ? calf.femaleDetails : nextAnimals[idx].femaleDetails,
+        maleDetails: calf.category === "Male" ? calf.maleDetails : nextAnimals[idx].maleDetails,
+      });
+    } else {
+      nextAnimals = [calf, ...nextAnimals];
+    }
+  });
+
+  return nextAnimals.sort(sortByTag);
 }
 
 function Section({ title, children }) {
@@ -273,7 +392,6 @@ export default function AnimalDataRecordingApp() {
       id: Date.now(),
       ...prepared,
       preCalvingLifecycle: prepared.category === "Female" ? "Heifer" : "",
-      firstCalvingDate: "",
     });
     setAnimals((prev) => [item, ...prev].sort(sortByTag));
     setSelectedId(item.id);
@@ -282,7 +400,15 @@ export default function AnimalDataRecordingApp() {
   }
 
   function patchSelected(fn) {
-    setAnimals((prev) => prev.map((a) => (a.id === selectedId ? fn(withDefaults(a)) : a)));
+    setAnimals((prev) => {
+      let updatedSelected = null;
+      const mapped = prev.map((a) => {
+        if (a.id !== selectedId) return a;
+        updatedSelected = fn(withDefaults(a));
+        return updatedSelected;
+      });
+      return updatedSelected?.category === "Female" ? syncDamCalvesInHerd(mapped, updatedSelected) : mapped;
+    });
   }
 
   function updateFemalePedigree(key, value) {
@@ -334,8 +460,17 @@ export default function AnimalDataRecordingApp() {
       const currentParity = a.femaleDetails.selectedReproParity;
       const parities = a.femaleDetails.reproductionParities.map((p) => {
         if (p.parityNo !== currentParity) return p;
-        const nextRecords = p.aiRecords.map((r, i) => (i === idx ? { ...r, [key]: value } : r));
-        return { ...p, aiRecords: nextRecords };
+        const nextRecords = p.aiRecords.map((r, i) => {
+          const next = i === idx ? { ...r, [key]: value } : r;
+          return next;
+        });
+        const conceivedRecord = nextRecords.find((r) => r.result === "Conceived");
+        return {
+          ...p,
+          aiRecords: nextRecords,
+          conceptionDate: conceivedRecord ? conceivedRecord.aiDate || p.conceptionDate : p.conceptionDate,
+          expectedCalvingDate: conceivedRecord ? addDays(conceivedRecord.aiDate || "", 310) : p.expectedCalvingDate,
+        };
       });
       return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
     });
@@ -369,8 +504,24 @@ export default function AnimalDataRecordingApp() {
 
   function updateCalvingParity(idx, key, value) {
     patchSelected((a) => {
-      const next = a.femaleDetails.calvingParities.map((p, i) => (i === idx ? { ...p, [key]: value } : p));
-      return { ...a, femaleDetails: { ...a.femaleDetails, calvingParities: next } };
+      const next = a.femaleDetails.calvingParities.map((p, i) => {
+        if (i !== idx) return p;
+        const row = { ...p, [key]: value };
+        if (key === "calvingDate" || key === "calvingOutcome") {
+          row.calfSire = row.calvingOutcome === "Normal calving" ? (getCalfSireForCalving(a, row.parityNo) || row.calfSire || "") : "";
+        }
+        if (key === "calvingOutcome" && value !== "Normal calving") {
+          row.calfSex = "";
+          row.calfTag = "";
+          row.calfSire = "";
+        }
+        return row;
+      });
+      return {
+        ...a,
+        preCalvingLifecycle: getFemaleLifecycle(a),
+        femaleDetails: { ...a.femaleDetails, calvingParities: next },
+      };
     });
   }
 
@@ -403,7 +554,7 @@ export default function AnimalDataRecordingApp() {
           <div className="topbar">
             <div>
               <div className="title">Buffalo Animal Data Recording App</div>
-              <div className="subtitle">Phase 2.1 patch · female tabs added: Pedigree, Reproduction, Calving</div>
+              <div className="subtitle">Phase 2.2 patch · calf sire auto-fill, auto calf creation, pedigree auto-linking</div>
             </div>
             <button className="primary-btn" onClick={() => setShowAdd(true)}>Add Animal</button>
           </div>
@@ -559,9 +710,9 @@ export default function AnimalDataRecordingApp() {
                         <Grid>
                           <TextField label="Calving date" value={cp.calvingDate || ""} onChange={(v) => updateCalvingParity(idx, "calvingDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
                           <SelectField label="Calf sex" value={cp.calfSex || ""} onChange={(v) => updateCalvingParity(idx, "calfSex", v)} options={["", ...SEX_OPTIONS]} />
-                          <TextField label="Calf tag no." value={cp.calfTag || ""} onChange={(v) => updateCalvingParity(idx, "calfTag", v)} />
-                          <TextField label="Calf sire" value={cp.calfSire || ""} onChange={(v) => updateCalvingParity(idx, "calfSire", v)} />
-                          <SelectField label="Calving outcome" value={cp.calvingOutcome || "Normal calving"} onChange={(v) => updateCalvingParity(idx, "calvingOutcome", v)} options={["Normal calving", "Stillbirth", "Abortion"]} />
+                          <TextField label="Calf tag no. (auto-adds calf)" value={cp.calfTag || ""} onChange={(v) => updateCalvingParity(idx, "calfTag", v)} />
+                          <TextField label="Calf sire (auto)" value={cp.calfSire || getCalfSireForCalving(selectedAnimal, cp.parityNo) || ""} onChange={(v) => updateCalvingParity(idx, "calfSire", v)} />
+                          <SelectField label="Calving outcome" value={cp.calvingOutcome || "Normal calving"} onChange={(v) => updateCalvingParity(idx, "calvingOutcome", v)} options={CALVING_OUTCOMES} />
                           <TextAreaField label="Remarks" value={cp.remarks || ""} onChange={(v) => updateCalvingParity(idx, "remarks", v)} />
                         </Grid>
                       </div>
