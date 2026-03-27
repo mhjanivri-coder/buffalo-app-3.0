@@ -532,6 +532,7 @@ export default function AnimalDataRecordingApp() {
   const [isEditingAnimal, setIsEditingAnimal] = useState(false);
   const [editAnimalForm, setEditAnimalForm] = useState({ ...emptyAnimal });
   const [validationMessage, setValidationMessage] = useState("");
+  const [archiveFilter, setArchiveFilter] = useState("All");
 
   const normalizedAnimals = useMemo(() => normalizeLineageAcrossHerd(animals.map(withDefaults)), [animals]);
   const activeAnimals = useMemo(() => normalizedAnimals.filter((a) => !isArchivedAnimal(a)), [normalizedAnimals]);
@@ -542,13 +543,63 @@ export default function AnimalDataRecordingApp() {
   }, [activeAnimals, search]);
   const filteredArchivedAnimals = useMemo(() => {
     const q = search.toLowerCase();
-    return archivedAnimals.filter((a) => [a.tagNo, a.breed, a.category, a.status, a.exitDate, a.exitReason].join(" ").toLowerCase().includes(q));
-  }, [archivedAnimals, search]);
+    return archivedAnimals.filter((a) => {
+      const matchesSearch = [a.tagNo, a.breed, a.category, a.status, a.exitDate, a.exitReason].join(" ").toLowerCase().includes(q);
+      const matchesArchiveFilter =
+        archiveFilter === "All" ||
+        (archiveFilter === "Dead" && a.status === "Dead") ||
+        (archiveFilter === "Culled" && a.status === "Culled") ||
+        (archiveFilter === "Female" && a.category === "Female") ||
+        (archiveFilter === "Male" && a.category === "Male");
+      return matchesSearch && matchesArchiveFilter;
+    });
+  }, [archivedAnimals, search, archiveFilter]);
   const stats = useMemo(() => {
     const females = activeAnimals.filter((a) => a.category === "Female"), males = activeAnimals.filter((a) => a.category === "Male");
     return { totalAnimals: activeAnimals.length, femaleCount: females.length, maleCount: males.length, heiferCount: females.filter((a) => getFemaleLifecycle(a) === "Heifer").length, colostrumHeiferCount: females.filter((a) => getFemaleLifecycle(a) === "Colostrum-Heifer").length, colostrumCount: females.filter((a) => getFemaleLifecycle(a) === "Colostrum").length, milkCount: females.filter((a) => getFemaleLifecycle(a) === "Milk").length, dryCount: females.filter((a) => getFemaleLifecycle(a) === "Dry").length };
   }, [activeAnimals]);
   const selectedAnimal = normalizedAnimals.find((a) => a.id === selectedId) || null;
+  const currentAnimalSummary = useMemo(() => {
+    if (!selectedAnimal) return null;
+    if (selectedAnimal.category === "Female") {
+      const reproCount = (selectedAnimal.femaleDetails?.reproductionParities || []).length;
+      const calvingCount = (selectedAnimal.femaleDetails?.calvingParities || []).length;
+      const healthCount =
+        (selectedAnimal.femaleDetails?.health?.bodyWeightRecords || []).length +
+        (selectedAnimal.femaleDetails?.health?.dewormingRecords || []).length +
+        (selectedAnimal.femaleDetails?.health?.vaccinationRecords || []).length +
+        (selectedAnimal.femaleDetails?.health?.treatmentRecords || []).length;
+      return {
+        type: "female",
+        cards: [
+          ["Current Category", getFemaleLifecycle(selectedAnimal)],
+          ["Repro Parities", reproCount],
+          ["Calving Records", calvingCount],
+          ["Health Entries", healthCount],
+        ],
+      };
+    }
+    if (selectedAnimal.category === "Male" && selectedAnimal.isBreedingBull === "Yes") {
+      return {
+        type: "male",
+        cards: [
+          ["Breeding Set", selectedAnimal.breedingSet || "—"],
+          ["Female Progenies", femaleProgenies.length],
+          ["Male Progenies", maleProgenies.length],
+          ["Archived Linked", [...femaleProgenies, ...maleProgenies].filter((a) => isArchivedAnimal(a)).length],
+        ],
+      };
+    }
+    return {
+      type: "male-basic",
+      cards: [
+        ["Status", selectedAnimal.status || "—"],
+        ["Breed", selectedAnimal.breed || "—"],
+        ["DOB", selectedAnimal.dob || "—"],
+        ["Breeding Bull", selectedAnimal.isBreedingBull === "Yes" ? "Yes" : "No"],
+      ],
+    };
+  }, [selectedAnimal, femaleProgenies, maleProgenies]);
   const visibleTabs = selectedAnimal?.category === "Female" ? FEMALE_TABS : selectedAnimal?.category === "Male" && selectedAnimal?.isBreedingBull === "Yes" ? MALE_TABS : [];
   const selectedReproParity = selectedAnimal?.femaleDetails?.reproductionParities?.find((p) => p.parityNo === selectedAnimal?.femaleDetails?.selectedReproParity) || null;
   const selectedLactation = selectedAnimal?.femaleDetails?.productionLactations?.find((l) => l.parityNo === selectedAnimal?.femaleDetails?.selectedProductionParity) || null;
@@ -580,6 +631,22 @@ export default function AnimalDataRecordingApp() {
       ).length,
     };
   }, [normalizedAnimals]);
+
+  function jumpToAnimalBySearch() {
+    const q = (search || "").trim().toLowerCase();
+    if (!q) return;
+    const target = normalizedAnimals.find((a) =>
+      [a.tagNo, a.breed, a.category, a.identificationMark, a.status].join(" ").toLowerCase().includes(q)
+    );
+    if (target) {
+      setSelectedId(target.id);
+      setHerdView(isArchivedAnimal(target) ? "archive" : "current");
+      setDetailTab(target.category === "Female" ? "pedigree" : target.isBreedingBull === "Yes" ? "pedigree" : "");
+      setValidationMessage(`Jumped to animal ${target.tagNo}.`);
+    } else {
+      setValidationMessage("No animal matched the current search.");
+    }
+  }
 
   function handleFormStatusChange(status) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, status })); }
   function handleFormCategoryChange(category) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, category })); }
@@ -869,6 +936,8 @@ export default function AnimalDataRecordingApp() {
             <StatCard title="Pregnant Females" value={dashboardData.pregnantFemales} />
             <StatCard title="Dead" value={normalizedAnimals.filter((a) => a.status === "Dead").length} />
             <StatCard title="Culled" value={normalizedAnimals.filter((a) => a.status === "Culled").length} />
+            <StatCard title="Milk Animals" value={dashboardData.femaleAnimals.filter((a) => getFemaleLifecycle(a) === "Milk").length} />
+            <StatCard title="Dry Animals" value={dashboardData.femaleAnimals.filter((a) => getFemaleLifecycle(a) === "Dry").length} />
           </div>
         </Section>
 
@@ -876,9 +945,15 @@ export default function AnimalDataRecordingApp() {
           <Section title="Herd Registry">
             <TextField label="Search" value={search} onChange={setSearch} />
             <div className="action-row">
+              <button className="secondary-btn" onClick={jumpToAnimalBySearch}>Jump to Animal</button>
               <button className={herdView === "current" ? "primary-btn" : "secondary-btn"} onClick={() => setHerdView("current")}>Current Herd</button>
               <button className={herdView === "archive" ? "primary-btn" : "secondary-btn"} onClick={() => setHerdView("archive")}>Archive</button>
             </div>
+            {herdView === "archive" && (
+              <div className="action-row">
+                <SelectField label="Archive filter" value={archiveFilter} onChange={setArchiveFilter} options={["All", "Dead", "Culled", "Female", "Male"]} />
+              </div>
+            )}
             <div className="list-wrap">
               {currentList.length === 0 && <div className="empty-note">No animals found.</div>}
               {currentList.map((animal) => (
@@ -894,6 +969,11 @@ export default function AnimalDataRecordingApp() {
             <Section title="Selected Animal Preview">
               {selectedAnimal && <div className="action-row"><button className="secondary-btn" onClick={openEditAnimal}>Edit Animal</button></div>}
               {!selectedAnimal && <div className="empty-note">No animal selected.</div>}
+              {selectedAnimal && currentAnimalSummary && (
+                <div className="stats-grid slim-stats">
+                  {currentAnimalSummary.cards.map(([title, value]) => <StatCard key={title} title={title} value={value} />)}
+                </div>
+              )}
               {selectedAnimal && (
                 <div className="preview-grid">
                   <div><strong>Tag No.:</strong> {selectedAnimal.tagNo}</div>
@@ -1057,6 +1137,8 @@ export default function AnimalDataRecordingApp() {
                       <StatCard title="Archived linked" value={[...femaleProgenies, ...maleProgenies].filter((a) => isArchivedAnimal(a)).length} />
                       <StatCard title="Daughters in milk" value={femaleProgenies.filter((a) => getFemaleLifecycle(a) === "Milk").length} />
                     </div>
+                    <div className="print-note">This layout is optimized for on-screen review and browser printing.</div>
+                    <div className="print-note">This layout is optimized for on-screen review and browser printing.</div>
                     <div className="table-wrap">
                       <table className="history-table">
                         <thead><tr><th>Parity</th><th>Date Calved</th><th>GP</th><th>Sex of Calf</th><th>Tag No. of Calf</th><th>Date of 1st AI</th><th>Date of Conception</th><th>Bull No./Set No.</th><th>Total AI</th><th>Dry Date</th><th>TLMY</th><th>SLMY</th><th>LL</th><th>PY</th><th>SP</th><th>CI</th><th>Fat %</th><th>SNF %</th><th>TS %</th></tr></thead>

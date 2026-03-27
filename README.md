@@ -1,3 +1,3 @@
-# Phase 3.1 patch
+# Phase 3.2 patch
 
-Adds stricter validation for add/edit animal and tab progression, plus improved archive dashboard stats.
+Adds jump-to-animal search, archive filters, printable on-screen history notes, and tighter summary cards.
