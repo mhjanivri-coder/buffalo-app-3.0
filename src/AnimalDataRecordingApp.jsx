@@ -304,6 +304,8 @@ export default function AnimalDataRecordingApp() {
   const [maleProgenySubTab, setMaleProgenySubTab] = useState("female");
   const [daughterPerfSubTab, setDaughterPerfSubTab] = useState("production");
   const [newAnimal, setNewAnimal] = useState({ ...emptyAnimal });
+  const [isEditingAnimal, setIsEditingAnimal] = useState(false);
+  const [editAnimalForm, setEditAnimalForm] = useState({ ...emptyAnimal });
 
   const normalizedAnimals = useMemo(() => animals.map(withDefaults), [animals]);
   const activeAnimals = useMemo(() => normalizedAnimals.filter((a) => !isArchivedAnimal(a)), [normalizedAnimals]);
@@ -353,6 +355,50 @@ export default function AnimalDataRecordingApp() {
     setShowAdd(false);
     setNewAnimal({ ...emptyAnimal });
   }
+  function openEditAnimal() {
+    if (!selectedAnimal) return;
+    setEditAnimalForm({
+      tagNo: selectedAnimal.tagNo || "",
+      breed: selectedAnimal.breed || "Nili-Ravi buffalo",
+      dob: selectedAnimal.dob || "",
+      category: selectedAnimal.category || "Female",
+      identificationMark: selectedAnimal.identificationMark || "",
+      status: selectedAnimal.status || "Active (present in herd)",
+      exitDate: selectedAnimal.exitDate || "",
+      exitReason: selectedAnimal.exitReason || "",
+      isBreedingBull: selectedAnimal.isBreedingBull || "No",
+      breedingSet: selectedAnimal.breedingSet || "",
+    });
+    setIsEditingAnimal(true);
+  }
+  function saveEditedAnimal() {
+    if (!selectedAnimal) return;
+    const prepared = normalizeAnimalFormData(editAnimalForm);
+    setAnimals((prev) => prev.map((a) => a.id === selectedAnimal.id ? withDefaults({ ...a, ...prepared }) : a).sort(sortByTag));
+    setIsEditingAnimal(false);
+  }
+  function goToNextTab() {
+    const tabs = visibleTabs;
+    const idx = tabs.indexOf(detailTab);
+    if (idx >= 0 && idx < tabs.length - 1) setDetailTab(tabs[idx + 1]);
+  }
+  function submitTabs() {
+    alert("Record submitted.");
+  }
+  function renderTabFooter() {
+    if (!selectedAnimal || !visibleTabs.length || !detailTab) return null;
+    const idx = visibleTabs.indexOf(detailTab);
+    if (idx === -1) return null;
+    const last = idx === visibleTabs.length - 1;
+    return (
+      <div className="action-row">
+        <button className="primary-btn" onClick={last ? submitTabs : goToNextTab}>
+          {last ? "Submit" : "Save and Next"}
+        </button>
+      </div>
+    );
+  }
+
   function patchSelected(fn) {
     setAnimals((prev) => {
       let updatedSelected = null;
@@ -471,6 +517,35 @@ export default function AnimalDataRecordingApp() {
           </Section>
         )}
 
+        {isEditingAnimal && (
+          <Section title="Edit Animal">
+            <Grid>
+              <SelectField label="Breed" value={editAnimalForm.breed} onChange={(v) => setEditAnimalForm((s) => ({ ...s, breed: v }))} options={BREEDS} />
+              <TextField label="Tag No." value={editAnimalForm.tagNo} onChange={(v) => setEditAnimalForm((s) => ({ ...s, tagNo: v }))} />
+              <TextField label="Date of birth" value={editAnimalForm.dob} onChange={(v) => setEditAnimalForm((s) => ({ ...s, dob: normalizeDisplayDate(v) }))} placeholder="dd/mm/yyyy" />
+              <SelectField label="Category" value={editAnimalForm.category} onChange={(v) => setEditAnimalForm((s) => normalizeAnimalFormData({ ...s, category: v }))} options={SEX_OPTIONS} />
+              <TextField label="Identification mark" value={editAnimalForm.identificationMark} onChange={(v) => setEditAnimalForm((s) => ({ ...s, identificationMark: v }))} />
+              <SelectField label="Status" value={editAnimalForm.status} onChange={(v) => setEditAnimalForm((s) => normalizeAnimalFormData({ ...s, status: v }))} options={STATUS_OPTIONS} />
+              {editAnimalForm.category === "Male" && (
+                <>
+                  <SelectField label="Selected for breeding" value={editAnimalForm.isBreedingBull || "No"} onChange={(v) => setEditAnimalForm((s) => normalizeAnimalFormData({ ...s, isBreedingBull: v }))} options={["No", "Yes"]} />
+                  {editAnimalForm.isBreedingBull === "Yes" && <TextField label="Included as breeding in which set (Roman numerals only)" value={editAnimalForm.breedingSet || ""} onChange={(v) => setEditAnimalForm((s) => ({ ...s, breedingSet: normalizeRomanInput(v) }))} />}
+                </>
+              )}
+              {editAnimalForm.status !== "Active (present in herd)" && (
+                <>
+                  <TextField label="Date of Death / Culling" value={editAnimalForm.exitDate || ""} onChange={(v) => setEditAnimalForm((s) => ({ ...s, exitDate: normalizeDisplayDate(v) }))} placeholder="dd/mm/yyyy" />
+                  <TextAreaField label="Reason of Death / Culling" value={editAnimalForm.exitReason || ""} onChange={(v) => setEditAnimalForm((s) => ({ ...s, exitReason: v }))} />
+                </>
+              )}
+            </Grid>
+            <div className="action-row">
+              <button className="primary-btn" onClick={saveEditedAnimal}>Save Animal</button>
+              <button className="secondary-btn" onClick={() => setIsEditingAnimal(false)}>Cancel</button>
+            </div>
+          </Section>
+        )}
+
         <div className="stats-grid">
           <StatCard title="Total Animals" value={stats.totalAnimals} />
           <StatCard title="Females" value={stats.femaleCount} />
@@ -502,6 +577,7 @@ export default function AnimalDataRecordingApp() {
 
           <div className="right-stack">
             <Section title="Selected Animal Preview">
+              {selectedAnimal && <div className="action-row"><button className="secondary-btn" onClick={openEditAnimal}>Edit Animal</button></div>}
               {!selectedAnimal && <div className="empty-note">No animal selected.</div>}
               {selectedAnimal && (
                 <div className="preview-grid">
@@ -661,6 +737,7 @@ export default function AnimalDataRecordingApp() {
                     <div className="action-row"><button className="primary-btn" onClick={() => exportHistoryPdf(selectedAnimal)}>Export History PDF</button></div>
                   </div>
                 )}
+                {renderTabFooter()}
               </Section>
             )}
 
@@ -788,6 +865,7 @@ export default function AnimalDataRecordingApp() {
                     </div>
                   </div>
                 )}
+                {renderTabFooter()}
               </Section>
             )}
           </div>

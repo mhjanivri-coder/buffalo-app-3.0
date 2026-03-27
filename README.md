@@ -1,3 +1,3 @@
-# Phase 2.6 patch
+# Phase 2.7 patch
 
-Adds breeding bull tabs: pedigree, disease testing, progenies born, performance of daughters, health, overall history sheet.
+Adds Edit Animal button in Selected Animal Preview and Save and Next / Submit controls across female and male tabs.
