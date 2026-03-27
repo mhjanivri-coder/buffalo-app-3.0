@@ -1,3 +1,3 @@
-# Phase 2.5 patch
+# Phase 2.6 patch
 
-Adds female history sheet and PDF export.
+Adds breeding bull tabs: pedigree, disease testing, progenies born, performance of daughters, health, overall history sheet.
