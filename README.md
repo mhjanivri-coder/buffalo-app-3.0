@@ -1,3 +1,3 @@
-# Phase 3.1 patch
+# Phase 4.0 patch
 
-Adds stricter validation for add/edit animal and tab progression, plus improved archive dashboard stats.
+Adds mobile-friendly quick controls, browser local persistence, full JSON backup/export, and JSON import/merge support.
