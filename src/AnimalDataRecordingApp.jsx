@@ -1,9 +1,11 @@
 import React, { useMemo, useState } from "react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 const BREEDS = ["Murrah buffalo", "Nili-Ravi buffalo"];
 const SEX_OPTIONS = ["Female", "Male"];
 const STATUS_OPTIONS = ["Active (present in herd)", "Dead", "Culled"];
-const FEMALE_TABS = ["pedigree", "reproduction", "calving", "production", "health"];
+const FEMALE_TABS = ["pedigree", "reproduction", "calving", "production", "health", "history"];
 const AI_RESULTS = ["Pending", "Negative", "Conceived"];
 const CALVING_OUTCOMES = ["Normal calving", "Stillbirth", "Abortion"];
 const ENTRY_MODES = ["Manual", "Friday Records"];
@@ -46,213 +48,96 @@ const emptyPedigree = {
 };
 
 function makeReproParity(parityNo) {
-  return {
-    parityNo: String(parityNo),
-    conceptionDate: "",
-    expectedCalvingDate: "",
-    remarks: "",
-    aiRecords: [],
-  };
+  return { parityNo: String(parityNo), conceptionDate: "", expectedCalvingDate: "", remarks: "", aiRecords: [] };
 }
-
 function makeCalvingParity(parityNo) {
-  return {
-    parityNo: String(parityNo),
-    calvingDate: "",
-    calfSex: "",
-    calfTag: "",
-    calfSire: "",
-    calvingOutcome: "Normal calving",
-    remarks: "",
-  };
+  return { parityNo: String(parityNo), calvingDate: "", calfSex: "", calfTag: "", calfSire: "", calvingOutcome: "Normal calving", remarks: "" };
 }
-
 function makeFridayRecord(date = "") {
-  return {
-    date,
-    morningMilk: "",
-    eveningMilk: "",
-    totalDailyYield: "",
-    fatPct: "",
-    snfPct: "",
-    tsPct: "",
-  };
+  return { date, morningMilk: "", eveningMilk: "", totalDailyYield: "", fatPct: "", snfPct: "", tsPct: "" };
 }
-
 function makeProductionLactation(parityNo) {
-  return {
-    parityNo: String(parityNo),
-    entryMode: "Manual",
-    calvingDate: "",
-    dryDate: "",
-    manualSummary: {
-      totalLactationMilk: "",
-      standardLactationMilk: "",
-      peakYield: "",
-    },
-    fridayRecords: [],
-  };
+  return { parityNo: String(parityNo), entryMode: "Manual", calvingDate: "", dryDate: "", manualSummary: { totalLactationMilk: "", standardLactationMilk: "", peakYield: "" }, fridayRecords: [] };
 }
-
-function makeBodyWeightRecord() {
-  return { recordDate: "", bodyWeight: "" };
-}
-
-function makeDewormingRecord() {
-  return { dewormingDate: "", anthelminticUsed: "" };
-}
-
-function makeVaccinationRecord() {
-  return { vaccinationDate: "", vaccineUsed: "" };
-}
-
-function makeTreatmentRecord() {
-  return { treatmentDate: "", diagnosis: "", treatmentGiven: "" };
-}
+function makeBodyWeightRecord() { return { recordDate: "", bodyWeight: "" }; }
+function makeDewormingRecord() { return { dewormingDate: "", anthelminticUsed: "" }; }
+function makeVaccinationRecord() { return { vaccinationDate: "", vaccineUsed: "" }; }
+function makeTreatmentRecord() { return { treatmentDate: "", diagnosis: "", treatmentGiven: "" }; }
 
 function parseDisplayDate(value) {
   if (!value || typeof value !== "string") return null;
   const parts = value.trim().split("/");
   if (parts.length !== 3) return null;
-  const day = Number(parts[0]);
-  const month = Number(parts[1]);
-  const year = Number(parts[2]);
+  const day = Number(parts[0]), month = Number(parts[1]), year = Number(parts[2]);
   if (!day || !month || !year) return null;
   const dt = new Date(year, month - 1, day);
   if (dt.getFullYear() !== year || dt.getMonth() !== month - 1 || dt.getDate() !== day) return null;
   return dt;
 }
-
 function formatDateDisplay(date) {
   const dd = String(date.getDate()).padStart(2, "0");
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const yyyy = String(date.getFullYear());
   return `${dd}/${mm}/${yyyy}`;
 }
-
-function normalizeDisplayDate(value) {
-  const dt = parseDisplayDate(value);
-  return dt ? formatDateDisplay(dt) : value;
-}
-
-function addDays(dateStr, days) {
-  const dt = parseDisplayDate(dateStr);
-  if (!dt) return "";
-  const copy = new Date(dt);
-  copy.setDate(copy.getDate() + days);
-  return formatDateDisplay(copy);
-}
-
-function daysBetween(start, end) {
-  const a = parseDisplayDate(start);
-  const b = parseDisplayDate(end);
-  if (!a || !b) return 0;
-  return Math.max(0, Math.round((b.getTime() - a.getTime()) / 86400000));
-}
-
-function normalizeRomanInput(value) {
-  return (value || "").toUpperCase().replace(/[^IVXLCDM]/g, "");
-}
-
-function isArchivedAnimal(animal) {
-  const archivedStatus = animal?.status === "Dead" || animal?.status === "Culled";
-  return archivedStatus && Boolean((animal?.exitDate || "").trim()) && Boolean((animal?.exitReason || "").trim());
-}
-
+function normalizeDisplayDate(value) { const dt = parseDisplayDate(value); return dt ? formatDateDisplay(dt) : value; }
+function addDays(dateStr, days) { const dt = parseDisplayDate(dateStr); if (!dt) return ""; const copy = new Date(dt); copy.setDate(copy.getDate() + days); return formatDateDisplay(copy); }
+function daysBetween(start, end) { const a = parseDisplayDate(start), b = parseDisplayDate(end); if (!a || !b) return 0; return Math.max(0, Math.round((b.getTime() - a.getTime()) / 86400000)); }
+function normalizeRomanInput(value) { return (value || "").toUpperCase().replace(/[^IVXLCDM]/g, ""); }
+function isArchivedAnimal(animal) { const archivedStatus = animal?.status === "Dead" || animal?.status === "Culled"; return archivedStatus && Boolean((animal?.exitDate || "").trim()) && Boolean((animal?.exitReason || "").trim()); }
 function normalizeAnimalFormData(form) {
   const next = { ...form };
-  if (next.status === "Active (present in herd)") {
-    next.exitDate = "";
-    next.exitReason = "";
-  }
-  if (next.category !== "Male") {
-    next.isBreedingBull = "No";
-    next.breedingSet = "";
-  } else {
-    next.isBreedingBull = next.isBreedingBull || "No";
-    next.breedingSet = next.isBreedingBull === "Yes" ? normalizeRomanInput(next.breedingSet || "") : "";
-  }
+  if (next.status === "Active (present in herd)") { next.exitDate = ""; next.exitReason = ""; }
+  if (next.category !== "Male") { next.isBreedingBull = "No"; next.breedingSet = ""; }
+  else { next.isBreedingBull = next.isBreedingBull || "No"; next.breedingSet = next.isBreedingBull === "Yes" ? normalizeRomanInput(next.breedingSet || "") : ""; }
   return next;
 }
-
 function getFemaleLifecycle(animal) {
   if (!animal || animal.category !== "Female") return animal?.category || "";
   const calvings = animal?.femaleDetails?.calvingParities || [];
-  const last = [...calvings]
-    .filter((p) => p.calvingDate && p.calvingOutcome === "Normal calving")
-    .sort((a, b) => {
-      const ad = parseDisplayDate(a.calvingDate);
-      const bd = parseDisplayDate(b.calvingDate);
-      if (!ad || !bd) return 0;
-      return bd.getTime() - ad.getTime();
-    })[0];
+  const last = [...calvings].filter((p) => p.calvingDate && p.calvingOutcome === "Normal calving").sort((a, b) => {
+    const ad = parseDisplayDate(a.calvingDate), bd = parseDisplayDate(b.calvingDate); if (!ad || !bd) return 0; return bd.getTime() - ad.getTime();
+  })[0];
   if (!last?.calvingDate) return "Heifer";
-  const calving = parseDisplayDate(last.calvingDate);
-  if (!calving) return "Heifer";
-  const today = new Date();
-  const days = Math.max(0, Math.round((today.getTime() - calving.getTime()) / 86400000));
+  const calving = parseDisplayDate(last.calvingDate); if (!calving) return "Heifer";
+  const today = new Date(); const days = Math.max(0, Math.round((today.getTime() - calving.getTime()) / 86400000));
   if (days < COLOSTRUM_DAYS) return animal.preCalvingLifecycle === "Heifer" ? "Colostrum-Heifer" : "Colostrum";
   return animal.preCalvingLifecycle === "Heifer" ? "Dry" : "Milk";
 }
-
 function sortByTag(a, b) {
-  const an = Number(a.tagNo);
-  const bn = Number(b.tagNo);
-  const aNum = Number.isFinite(an) && !Number.isNaN(an);
-  const bNum = Number.isFinite(bn) && !Number.isNaN(bn);
+  const an = Number(a.tagNo), bn = Number(b.tagNo);
+  const aNum = Number.isFinite(an) && !Number.isNaN(an), bNum = Number.isFinite(bn) && !Number.isNaN(bn);
   if (aNum && bNum) return an - bn;
   return String(a.tagNo).localeCompare(String(b.tagNo), undefined, { numeric: true, sensitivity: "base" });
 }
-
 function firstRecordableFriday(calvingDate) {
-  const base = parseDisplayDate(calvingDate);
-  if (!base) return "";
+  const base = parseDisplayDate(calvingDate); if (!base) return "";
   for (let i = 0; i <= 14; i += 1) {
-    const d = new Date(base);
-    d.setDate(d.getDate() + i);
-    const candidate = formatDateDisplay(d);
-    const gap = daysBetween(calvingDate, candidate);
+    const d = new Date(base); d.setDate(d.getDate() + i);
+    const candidate = formatDateDisplay(d); const gap = daysBetween(calvingDate, candidate);
     if (d.getDay() === 5 && gap > 5) return candidate;
   }
   return "";
 }
-
 function recalcFridayRecord(record) {
   const hasMilkEntry = record.morningMilk !== "" || record.eveningMilk !== "";
   const total = Number(record.morningMilk || 0) + Number(record.eveningMilk || 0);
   return { ...record, totalDailyYield: hasMilkEntry ? String(total) : record.totalDailyYield || "" };
 }
-
 function defaultHealth() {
-  return {
-    bodyWeightRecords: [makeBodyWeightRecord()],
-    dewormingRecords: [makeDewormingRecord()],
-    vaccinationRecords: [makeVaccinationRecord()],
-    treatmentRecords: [makeTreatmentRecord()],
-  };
+  return { bodyWeightRecords: [makeBodyWeightRecord()], dewormingRecords: [makeDewormingRecord()], vaccinationRecords: [makeVaccinationRecord()], treatmentRecords: [makeTreatmentRecord()] };
 }
-
 function withDefaults(animal) {
   return {
     ...animal,
     femaleDetails: animal.category === "Female" ? {
       pedigree: { ...emptyPedigree, ...(animal.femaleDetails?.pedigree || {}) },
-      reproductionParities: animal.femaleDetails?.reproductionParities?.length
-        ? animal.femaleDetails.reproductionParities.map((p) => ({ ...p, aiRecords: (p.aiRecords || []).map((r) => ({ ...r })) }))
-        : [makeReproParity(0)],
+      reproductionParities: animal.femaleDetails?.reproductionParities?.length ? animal.femaleDetails.reproductionParities.map((p) => ({ ...p, aiRecords: (p.aiRecords || []).map((r) => ({ ...r })) })) : [makeReproParity(0)],
       selectedReproParity: animal.femaleDetails?.selectedReproParity || "0",
-      calvingParities: animal.femaleDetails?.calvingParities?.length
-        ? animal.femaleDetails.calvingParities.map((p) => ({ ...p }))
-        : [makeCalvingParity(1)],
-      productionLactations: animal.femaleDetails?.productionLactations?.length
-        ? animal.femaleDetails.productionLactations.map((l) => ({
-            ...l,
-            calvingDate: l.calvingDate || "",
-            manualSummary: { totalLactationMilk: "", standardLactationMilk: "", peakYield: "", ...(l.manualSummary || {}) },
-            fridayRecords: (l.fridayRecords || []).map((r) => recalcFridayRecord({ ...r })),
-          }))
-        : [makeProductionLactation(1)],
+      calvingParities: animal.femaleDetails?.calvingParities?.length ? animal.femaleDetails.calvingParities.map((p) => ({ ...p })) : [makeCalvingParity(1)],
+      productionLactations: animal.femaleDetails?.productionLactations?.length ? animal.femaleDetails.productionLactations.map((l) => ({ ...l, calvingDate: l.calvingDate || "", manualSummary: { totalLactationMilk: "", standardLactationMilk: "", peakYield: "", ...(l.manualSummary || {}) }, fridayRecords: (l.fridayRecords || []).map((r) => recalcFridayRecord({ ...r })) })) : [makeProductionLactation(1)],
       selectedProductionParity: animal.femaleDetails?.selectedProductionParity || "1",
+      historyMeta: { reasonForCulling: "", bookValue: "", ...(animal.femaleDetails?.historyMeta || {}) },
       health: {
         ...defaultHealth(),
         ...(animal.femaleDetails?.health || {}),
@@ -262,24 +147,11 @@ function withDefaults(animal) {
         treatmentRecords: animal.femaleDetails?.health?.treatmentRecords?.length ? animal.femaleDetails.health.treatmentRecords.map((r) => ({ ...r })) : [makeTreatmentRecord()],
       },
     } : undefined,
-    maleDetails: animal.category === "Male" ? {
-      pedigree: { ...emptyPedigree, ...(animal.maleDetails?.pedigree || {}) },
-    } : undefined,
+    maleDetails: animal.category === "Male" ? { pedigree: { ...emptyPedigree, ...(animal.maleDetails?.pedigree || {}) } } : undefined,
   };
 }
-
-function formatBullSet(aiRecord) {
-  if (!aiRecord) return "";
-  const bullNo = (aiRecord.aiBullNo || "").trim();
-  const setNo = (aiRecord.aiSetNo || "").trim();
-  if (bullNo && setNo) return `${bullNo}/${setNo}`;
-  return bullNo || setNo || "";
-}
-
-function getReproParityByNo(animal, parityNo) {
-  return animal?.femaleDetails?.reproductionParities?.find((p) => Number(p.parityNo) === Number(parityNo)) || null;
-}
-
+function formatBullSet(aiRecord) { if (!aiRecord) return ""; const bullNo = (aiRecord.aiBullNo || "").trim(); const setNo = (aiRecord.aiSetNo || "").trim(); if (bullNo && setNo) return `${bullNo}/${setNo}`; return bullNo || setNo || ""; }
+function getReproParityByNo(animal, parityNo) { return animal?.femaleDetails?.reproductionParities?.find((p) => Number(p.parityNo) === Number(parityNo)) || null; }
 function getConceivedAIRecord(reproParity) {
   if (!reproParity) return null;
   const aiRecords = reproParity.aiRecords || [];
@@ -291,139 +163,63 @@ function getConceivedAIRecord(reproParity) {
   }
   return aiRecords.length ? aiRecords[aiRecords.length - 1] : null;
 }
-
-function getCalfSireForCalving(animal, calvingParityNo) {
-  const sourceReproParity = Number(calvingParityNo) - 1;
-  if (sourceReproParity < 0) return "";
-  const reproParity = getReproParityByNo(animal, sourceReproParity);
-  return formatBullSet(getConceivedAIRecord(reproParity));
-}
-
-function getCalvingDateForParity(animal, parityNo) {
-  return animal?.femaleDetails?.calvingParities?.find((c) => Number(c.parityNo) === Number(parityNo))?.calvingDate || "";
-}
-
+function getCalfSireForCalving(animal, calvingParityNo) { const sourceReproParity = Number(calvingParityNo) - 1; if (sourceReproParity < 0) return ""; const reproParity = getReproParityByNo(animal, sourceReproParity); return formatBullSet(getConceivedAIRecord(reproParity)); }
+function getCalvingDateForParity(animal, parityNo) { return animal?.femaleDetails?.calvingParities?.find((c) => Number(c.parityNo) === Number(parityNo))?.calvingDate || ""; }
 function computeCalvingMetrics(animal, calvingParityNo) {
   const p = Number(calvingParityNo);
   const currentCalving = getCalvingDateForParity(animal, p);
   const previousCalving = getCalvingDateForParity(animal, p - 1);
   const previousRepro = getReproParityByNo(animal, p - 1);
-  let afc = "";
-  if (p === 1 && animal?.dob && currentCalving) afc = String(daysBetween(animal.dob, currentCalving));
-  let gestationPeriod = "";
-  if (previousRepro?.conceptionDate && currentCalving) gestationPeriod = String(daysBetween(previousRepro.conceptionDate, currentCalving));
-  let servicePeriod = "";
-  if (p >= 2 && previousCalving && previousRepro?.conceptionDate) servicePeriod = String(daysBetween(previousCalving, previousRepro.conceptionDate));
-  let calvingInterval = "";
-  if (p >= 2 && previousCalving && currentCalving) calvingInterval = String(daysBetween(previousCalving, currentCalving));
+  let afc = ""; if (p === 1 && animal?.dob && currentCalving) afc = String(daysBetween(animal.dob, currentCalving));
+  let gestationPeriod = ""; if (previousRepro?.conceptionDate && currentCalving) gestationPeriod = String(daysBetween(previousRepro.conceptionDate, currentCalving));
+  let servicePeriod = ""; if (p >= 2 && previousCalving && previousRepro?.conceptionDate) servicePeriod = String(daysBetween(previousCalving, previousRepro.conceptionDate));
+  let calvingInterval = ""; if (p >= 2 && previousCalving && currentCalving) calvingInterval = String(daysBetween(previousCalving, currentCalving));
   return { afc, gestationPeriod, servicePeriod, calvingInterval };
 }
-
 function buildAutoCalfAnimal(dam, calvingParity) {
   if (!dam || dam.category !== "Female") return null;
   if ((calvingParity?.calvingOutcome || "") !== "Normal calving") return null;
-  const calfTag = (calvingParity?.calfTag || "").trim();
-  const calfSex = calvingParity?.calfSex || "";
-  const calfDob = calvingParity?.calvingDate || "";
+  const calfTag = (calvingParity?.calfTag || "").trim(), calfSex = calvingParity?.calfSex || "", calfDob = calvingParity?.calvingDate || "";
   const calfSire = (calvingParity?.calfSire || getCalfSireForCalving(dam, calvingParity?.parityNo) || "").trim();
   if (!calfTag || !calfSex || !calfDob) return null;
-
-  const base = {
-    id: `calf-${dam.id}-${calvingParity.parityNo}`,
-    tagNo: calfTag,
-    breed: dam.breed || "Nili-Ravi buffalo",
-    dob: calfDob,
-    category: calfSex === "Female" ? "Female" : "Male",
-    identificationMark: "",
-    status: "Active (present in herd)",
-    exitDate: "",
-    exitReason: "",
-    isBreedingBull: "No",
-    breedingSet: "",
-    linkedDamId: dam.id,
-    linkedCalvingParityNo: String(calvingParity.parityNo),
-    autoAddedFromBirth: true,
-    preCalvingLifecycle: "Heifer",
-  };
-
+  const base = { id: `calf-${dam.id}-${calvingParity.parityNo}`, tagNo: calfTag, breed: dam.breed || "Nili-Ravi buffalo", dob: calfDob, category: calfSex === "Female" ? "Female" : "Male", identificationMark: "", status: "Active (present in herd)", exitDate: "", exitReason: "", isBreedingBull: "No", breedingSet: "", linkedDamId: dam.id, linkedCalvingParityNo: String(calvingParity.parityNo), autoAddedFromBirth: true, preCalvingLifecycle: "Heifer" };
   if (calfSex === "Female") {
-    return withDefaults({
-      ...base,
-      femaleDetails: {
-        pedigree: { ...emptyPedigree, dam: dam.tagNo || "", sire: calfSire },
-        reproductionParities: [makeReproParity(0)],
-        selectedReproParity: "0",
-        calvingParities: [makeCalvingParity(1)],
-        productionLactations: [makeProductionLactation(1)],
-        selectedProductionParity: "1",
-        health: defaultHealth(),
-      },
-    });
+    return withDefaults({ ...base, femaleDetails: { pedigree: { ...emptyPedigree, dam: dam.tagNo || "", sire: calfSire }, reproductionParities: [makeReproParity(0)], selectedReproParity: "0", calvingParities: [makeCalvingParity(1)], productionLactations: [makeProductionLactation(1)], selectedProductionParity: "1", historyMeta: { reasonForCulling: "", bookValue: "" }, health: defaultHealth() } });
   }
-
-  return withDefaults({
-    ...base,
-    maleDetails: {
-      pedigree: { ...emptyPedigree, dam: dam.tagNo || "", sire: calfSire },
-    },
-  });
+  return withDefaults({ ...base, maleDetails: { pedigree: { ...emptyPedigree, dam: dam.tagNo || "", sire: calfSire } } });
 }
-
 function syncDamCalvesInHerd(animals, dam) {
   if (!dam || dam.category !== "Female") return animals;
-  const calfRecords = (dam.femaleDetails?.calvingParities || [])
-    .map((cp) => buildAutoCalfAnimal(dam, cp))
-    .filter(Boolean);
-
+  const calfRecords = (dam.femaleDetails?.calvingParities || []).map((cp) => buildAutoCalfAnimal(dam, cp)).filter(Boolean);
   let nextAnimals = animals.filter((animal) => {
     if (!animal?.autoAddedFromBirth || animal?.linkedDamId !== dam.id) return true;
     return calfRecords.some((calf) => calf.id === animal.id);
   });
-
   calfRecords.forEach((calf) => {
     const idx = nextAnimals.findIndex((animal) => animal.id === calf.id || (animal.tagNo === calf.tagNo && animal.id !== dam.id));
     if (idx >= 0) {
-      nextAnimals[idx] = withDefaults({
-        ...nextAnimals[idx],
-        ...calf,
-        femaleDetails: calf.category === "Female" ? calf.femaleDetails : nextAnimals[idx].femaleDetails,
-        maleDetails: calf.category === "Male" ? calf.maleDetails : nextAnimals[idx].maleDetails,
-      });
+      nextAnimals[idx] = withDefaults({ ...nextAnimals[idx], ...calf, femaleDetails: calf.category === "Female" ? calf.femaleDetails : nextAnimals[idx].femaleDetails, maleDetails: calf.category === "Male" ? calf.maleDetails : nextAnimals[idx].maleDetails });
     } else {
       nextAnimals = [calf, ...nextAnimals];
     }
   });
-
   return nextAnimals.sort(sortByTag);
 }
-
 function getNextFridayRecordDate(lactation) {
   const existing = lactation?.fridayRecords || [];
   if (!existing.length) return firstRecordableFriday(lactation?.calvingDate || "");
   const lastDate = existing[existing.length - 1]?.date || "";
   return lastDate ? addDays(lastDate, 7) : "";
 }
-
 function computeProductionMetrics(lactation) {
   if (!lactation) return { lactationLength: 0, totalLactationMilk: 0, standardLactationMilk: 0, peakYield: 0 };
-  const calvingDate = lactation.calvingDate || "";
-  const dryDate = lactation.dryDate || "";
+  const calvingDate = lactation.calvingDate || "", dryDate = lactation.dryDate || "";
   const lactationLength = calvingDate && dryDate ? daysBetween(calvingDate, dryDate) + 1 : 0;
-
   if (lactation.entryMode === "Manual") {
-    return {
-      lactationLength,
-      totalLactationMilk: Number(lactation.manualSummary.totalLactationMilk || 0),
-      standardLactationMilk: Number(lactation.manualSummary.standardLactationMilk || 0),
-      peakYield: Number(lactation.manualSummary.peakYield || 0),
-    };
+    return { lactationLength, totalLactationMilk: Number(lactation.manualSummary.totalLactationMilk || 0), standardLactationMilk: Number(lactation.manualSummary.standardLactationMilk || 0), peakYield: Number(lactation.manualSummary.peakYield || 0) };
   }
-
   const records = [...(lactation.fridayRecords || [])].filter((r) => r.date);
-  let total = 0;
-  let standard = 0;
-  let peak = 0;
-  let standardUsed = 0;
+  let total = 0, standard = 0, peak = 0, standardUsed = 0;
   records.forEach((r, index) => {
     const milk = Number(r.totalDailyYield || 0);
     peak = Math.max(peak, milk);
@@ -435,58 +231,66 @@ function computeProductionMetrics(lactation) {
   });
   return { lactationLength, totalLactationMilk: total, standardLactationMilk: standard, peakYield: peak };
 }
+function computeHistoryRows(animal) {
+  const rows = [];
+  const repros = animal?.femaleDetails?.reproductionParities || [];
+  const calvings = animal?.femaleDetails?.calvingParities || [];
+  const lactations = animal?.femaleDetails?.productionLactations || [];
+  const maxParity = Math.max(1, ...repros.map((p) => Number(p.parityNo || 0)), ...calvings.map((p) => Number(p.parityNo || 0)), ...lactations.map((p) => Number(p.parityNo || 0)));
+  for (let p = 0; p <= maxParity; p += 1) {
+    const repro = repros.find((r) => Number(r.parityNo) === p) || null;
+    const calving = calvings.find((c) => Number(c.parityNo) === p) || null;
+    const lactation = lactations.find((l) => Number(l.parityNo) === p) || null;
+    const prod = lactation ? computeProductionMetrics(lactation) : null;
+    const aiRecords = repro?.aiRecords || [];
+    const firstAI = aiRecords[0]?.aiDate || "";
+    const bullNo = formatBullSet(getConceivedAIRecord(repro) || aiRecords[aiRecords.length - 1]);
+    const totalAI = aiRecords.length ? String(aiRecords.length) : "";
+    const metrics = p >= 1 ? computeCalvingMetrics(animal, p) : { afc: "", gestationPeriod: "", servicePeriod: "", calvingInterval: "" };
+    rows.push({ parity: String(p), dateCalved: calving?.calvingDate || "", gp: metrics.gestationPeriod, sexOfCalf: calving?.calvingOutcome === "Normal calving" ? calving?.calfSex || "" : calving?.calvingOutcome || "", calfTag: calving?.calfTag || "", firstAI, conceptionDate: repro?.conceptionDate || "", bullNo, totalAI, dryDate: lactation?.dryDate || "", tlmy: lactation ? String(prod?.totalLactationMilk || "") : "", slmy: lactation ? String(prod?.standardLactationMilk || "") : "", ll: lactation && lactation.dryDate ? String(prod?.lactationLength || "") : "", py: lactation ? String(prod?.peakYield || "") : "", sp: metrics.servicePeriod, ci: metrics.calvingInterval, fat: "", snf: "", ts: "" });
+  }
+  return rows;
+}
+function exportHistoryPdf(animal) {
+  const rows = computeHistoryRows(animal);
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  doc.setFontSize(14); doc.text("BUFFALO HISTORY SHEET", 148, 12, { align: "center" });
+  doc.setFontSize(10); doc.text("ICAR-CENTRAL INSTITUTE FOR RESEARCH ON BUFFALOES", 148, 18, { align: "center" });
+  doc.text("SUB-CAMPUS, NABHA PUNJAB 147201", 148, 23, { align: "center" });
+  const afc = computeCalvingMetrics(animal, 1).afc || "";
+  doc.setFontSize(9);
+  doc.text(`Animal No.: ${animal.tagNo || ""}`, 14, 32);
+  doc.text(`Date of Birth: ${animal.dob || ""}`, 70, 32);
+  doc.text(`AFC (days): ${afc}`, 120, 32);
+  doc.text(`Reason for culling: ${animal?.femaleDetails?.historyMeta?.reasonForCulling || ""}`, 165, 32);
+  doc.text(`Book Value: ${animal?.femaleDetails?.historyMeta?.bookValue || ""}`, 235, 32);
+  autoTable(doc, {
+    startY: 36,
+    styles: { fontSize: 6.5, cellPadding: 1.2, overflow: "linebreak" },
+    headStyles: { fillColor: [220, 245, 232], textColor: 20, fontStyle: "bold" },
+    theme: "grid",
+    head: [["Parity", "Date Calved", "GP", "Sex of Calf", "Tag No. of Calf", "Date of 1st A.I", "Date of Conception", "Bull No./Set No.", "Total no. of AI", "Dry Date", "TLMY", "SLMY", "LL", "PY", "SP", "CI", "Fat %", "SNF %", "TS %"]],
+    body: rows.map((r) => [r.parity, r.dateCalved, r.gp, r.sexOfCalf, r.calfTag, r.firstAI, r.conceptionDate, r.bullNo, r.totalAI, r.dryDate, r.tlmy, r.slmy, r.ll, r.py, r.sp, r.ci, r.fat, r.snf, r.ts]),
+    margin: { left: 8, right: 8 },
+  });
+  doc.save(`buffalo-history-sheet-${animal.tagNo || "animal"}.pdf`);
+}
 
 function Section({ title, children }) {
-  return (
-    <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md">
-      <div className="mb-3 text-lg font-semibold text-emerald-900">{title}</div>
-      {children}
-    </div>
-  );
+  return <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md"><div className="mb-3 text-lg font-semibold text-emerald-900">{title}</div>{children}</div>;
 }
-
-function Grid({ children }) {
-  return <div className="grid grid-cols-1 gap-3 md:grid-cols-3">{children}</div>;
-}
-
+function Grid({ children }) { return <div className="grid grid-cols-1 gap-3 md:grid-cols-3">{children}</div>; }
 function TextField({ label, value, onChange, readOnly = false, placeholder = "" }) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <input value={value} readOnly={readOnly} placeholder={placeholder} onChange={readOnly ? undefined : (e) => onChange(e.target.value)} />
-    </label>
-  );
+  return <label className="field"><span>{label}</span><input value={value} readOnly={readOnly} placeholder={placeholder} onChange={readOnly ? undefined : (e) => onChange(e.target.value)} /></label>;
 }
-
 function SelectField({ label, value, onChange, options, disabled = false }) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
-        {options.map((o) => (
-          <option key={o} value={o}>{o || "—"}</option>
-        ))}
-      </select>
-    </label>
-  );
+  return <label className="field"><span>{label}</span><select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>{options.map((o) => <option key={o} value={o}>{o || "—"}</option>)}</select></label>;
 }
-
 function TextAreaField({ label, value, onChange, rows = 3 }) {
-  return (
-    <label className="field textarea-field">
-      <span>{label}</span>
-      <textarea rows={rows} value={value} onChange={(e) => onChange(e.target.value)} />
-    </label>
-  );
+  return <label className="field textarea-field"><span>{label}</span><textarea rows={rows} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
 }
-
 function StatCard({ title, value }) {
-  return (
-    <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md">
-      <div className="text-sm text-emerald-700">{title}</div>
-      <div className="text-2xl font-semibold text-emerald-900">{value}</div>
-    </div>
-  );
+  return <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md"><div className="text-sm text-emerald-700">{title}</div><div className="text-2xl font-semibold text-emerald-900">{value}</div></div>;
 }
 
 export default function AnimalDataRecordingApp() {
@@ -502,77 +306,35 @@ export default function AnimalDataRecordingApp() {
   const normalizedAnimals = useMemo(() => animals.map(withDefaults), [animals]);
   const activeAnimals = useMemo(() => normalizedAnimals.filter((a) => !isArchivedAnimal(a)), [normalizedAnimals]);
   const archivedAnimals = useMemo(() => normalizedAnimals.filter((a) => isArchivedAnimal(a)), [normalizedAnimals]);
-
   const filteredCurrentAnimals = useMemo(() => {
     const q = search.toLowerCase();
-    return activeAnimals.filter((a) =>
-      [a.tagNo, a.breed, a.category, a.status, a.identificationMark, a.isBreedingBull, a.breedingSet].join(" ").toLowerCase().includes(q)
-    );
+    return activeAnimals.filter((a) => [a.tagNo, a.breed, a.category, a.status, a.identificationMark, a.isBreedingBull, a.breedingSet].join(" ").toLowerCase().includes(q));
   }, [activeAnimals, search]);
-
   const filteredArchivedAnimals = useMemo(() => {
     const q = search.toLowerCase();
-    return archivedAnimals.filter((a) =>
-      [a.tagNo, a.breed, a.category, a.status, a.exitDate, a.exitReason].join(" ").toLowerCase().includes(q)
-    );
+    return archivedAnimals.filter((a) => [a.tagNo, a.breed, a.category, a.status, a.exitDate, a.exitReason].join(" ").toLowerCase().includes(q));
   }, [archivedAnimals, search]);
-
   const stats = useMemo(() => {
-    const females = activeAnimals.filter((a) => a.category === "Female");
-    const males = activeAnimals.filter((a) => a.category === "Male");
-    return {
-      totalAnimals: activeAnimals.length,
-      femaleCount: females.length,
-      maleCount: males.length,
-      heiferCount: females.filter((a) => getFemaleLifecycle(a) === "Heifer").length,
-      colostrumHeiferCount: females.filter((a) => getFemaleLifecycle(a) === "Colostrum-Heifer").length,
-      colostrumCount: females.filter((a) => getFemaleLifecycle(a) === "Colostrum").length,
-      milkCount: females.filter((a) => getFemaleLifecycle(a) === "Milk").length,
-      dryCount: females.filter((a) => getFemaleLifecycle(a) === "Dry").length,
-    };
+    const females = activeAnimals.filter((a) => a.category === "Female"), males = activeAnimals.filter((a) => a.category === "Male");
+    return { totalAnimals: activeAnimals.length, femaleCount: females.length, maleCount: males.length, heiferCount: females.filter((a) => getFemaleLifecycle(a) === "Heifer").length, colostrumHeiferCount: females.filter((a) => getFemaleLifecycle(a) === "Colostrum-Heifer").length, colostrumCount: females.filter((a) => getFemaleLifecycle(a) === "Colostrum").length, milkCount: females.filter((a) => getFemaleLifecycle(a) === "Milk").length, dryCount: females.filter((a) => getFemaleLifecycle(a) === "Dry").length };
   }, [activeAnimals]);
-
   const selectedAnimal = normalizedAnimals.find((a) => a.id === selectedId) || null;
-  const selectedReproParity =
-    selectedAnimal?.femaleDetails?.reproductionParities?.find((p) => p.parityNo === selectedAnimal?.femaleDetails?.selectedReproParity) || null;
-  const selectedLactation =
-    selectedAnimal?.femaleDetails?.productionLactations?.find((l) => l.parityNo === selectedAnimal?.femaleDetails?.selectedProductionParity) || null;
+  const selectedReproParity = selectedAnimal?.femaleDetails?.reproductionParities?.find((p) => p.parityNo === selectedAnimal?.femaleDetails?.selectedReproParity) || null;
+  const selectedLactation = selectedAnimal?.femaleDetails?.productionLactations?.find((l) => l.parityNo === selectedAnimal?.femaleDetails?.selectedProductionParity) || null;
   const productionMetrics = computeProductionMetrics(selectedLactation);
+  const historyRows = selectedAnimal?.category === "Female" ? computeHistoryRows(selectedAnimal) : [];
 
-  function handleFormStatusChange(status) {
-    setNewAnimal((s) => normalizeAnimalFormData({ ...s, status }));
-  }
-
-  function handleFormCategoryChange(category) {
-    setNewAnimal((s) => normalizeAnimalFormData({ ...s, category }));
-  }
-
+  function handleFormStatusChange(status) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, status })); }
+  function handleFormCategoryChange(category) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, category })); }
   function addAnimal() {
-    if (!newAnimal.tagNo.trim()) {
-      alert("Please enter Tag No.");
-      return;
-    }
+    if (!newAnimal.tagNo.trim()) { alert("Please enter Tag No."); return; }
     const prepared = normalizeAnimalFormData(newAnimal);
-    const item = withDefaults({
-      id: Date.now(),
-      ...prepared,
-      preCalvingLifecycle: prepared.category === "Female" ? "Heifer" : "",
-      femaleDetails: prepared.category === "Female" ? {
-        pedigree: { ...emptyPedigree },
-        reproductionParities: [makeReproParity(0)],
-        selectedReproParity: "0",
-        calvingParities: [makeCalvingParity(1)],
-        productionLactations: [makeProductionLactation(1)],
-        selectedProductionParity: "1",
-        health: defaultHealth(),
-      } : undefined,
-    });
+    const item = withDefaults({ id: Date.now(), ...prepared, preCalvingLifecycle: prepared.category === "Female" ? "Heifer" : "", femaleDetails: prepared.category === "Female" ? { pedigree: { ...emptyPedigree }, reproductionParities: [makeReproParity(0)], selectedReproParity: "0", calvingParities: [makeCalvingParity(1)], productionLactations: [makeProductionLactation(1)], selectedProductionParity: "1", historyMeta: { reasonForCulling: "", bookValue: "" }, health: defaultHealth() } : undefined });
     setAnimals((prev) => [item, ...prev].sort(sortByTag));
     setSelectedId(item.id);
     setNewAnimal({ ...emptyAnimal });
     setShowAdd(false);
   }
-
   function patchSelected(fn) {
     setAnimals((prev) => {
       let updatedSelected = null;
@@ -584,51 +346,28 @@ export default function AnimalDataRecordingApp() {
       return updatedSelected?.category === "Female" ? syncDamCalvesInHerd(mapped, updatedSelected) : mapped;
     });
   }
-
-  function updateFemalePedigree(key, value) {
-    patchSelected((a) => ({
-      ...a,
-      femaleDetails: {
-        ...a.femaleDetails,
-        pedigree: { ...a.femaleDetails.pedigree, [key]: value },
-      },
-    }));
-  }
-
+  function updateFemalePedigree(key, value) { patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, pedigree: { ...a.femaleDetails.pedigree, [key]: value } } })); }
   function updateSelectedRepro(key, value) {
     patchSelected((a) => {
       const currentParity = a.femaleDetails.selectedReproParity;
-      const parities = a.femaleDetails.reproductionParities.map((p) =>
-        p.parityNo === currentParity
-          ? { ...p, [key]: value, expectedCalvingDate: key === "conceptionDate" ? addDays(value, 310) : p.expectedCalvingDate }
-          : p
-      );
+      const parities = a.femaleDetails.reproductionParities.map((p) => p.parityNo === currentParity ? { ...p, [key]: value, expectedCalvingDate: key === "conceptionDate" ? addDays(value, 310) : p.expectedCalvingDate } : p);
       return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
     });
   }
-
   function addAIRecord() {
     patchSelected((a) => {
       const currentParity = a.femaleDetails.selectedReproParity;
-      const parities = a.femaleDetails.reproductionParities.map((p) =>
-        p.parityNo === currentParity
-          ? { ...p, aiRecords: [...p.aiRecords, { aiDate: "", aiBullNo: "", aiSetNo: "", result: "Pending" }] }
-          : p
-      );
+      const parities = a.femaleDetails.reproductionParities.map((p) => p.parityNo === currentParity ? { ...p, aiRecords: [...p.aiRecords, { aiDate: "", aiBullNo: "", aiSetNo: "", result: "Pending" }] } : p);
       return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
     });
   }
-
   function removeAIRecord() {
     patchSelected((a) => {
       const currentParity = a.femaleDetails.selectedReproParity;
-      const parities = a.femaleDetails.reproductionParities.map((p) =>
-        p.parityNo === currentParity ? { ...p, aiRecords: p.aiRecords.slice(0, -1) } : p
-      );
+      const parities = a.femaleDetails.reproductionParities.map((p) => p.parityNo === currentParity ? { ...p, aiRecords: p.aiRecords.slice(0, -1) } : p);
       return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
     });
   }
-
   function updateAIRecord(idx, key, value) {
     patchSelected((a) => {
       const currentParity = a.femaleDetails.selectedReproParity;
@@ -636,116 +375,53 @@ export default function AnimalDataRecordingApp() {
         if (p.parityNo !== currentParity) return p;
         const nextRecords = p.aiRecords.map((r, i) => i === idx ? { ...r, [key]: value } : r);
         const conceivedRecord = nextRecords.find((r) => r.result === "Conceived");
-        return {
-          ...p,
-          aiRecords: nextRecords,
-          conceptionDate: conceivedRecord ? conceivedRecord.aiDate || p.conceptionDate : p.conceptionDate,
-          expectedCalvingDate: conceivedRecord ? addDays(conceivedRecord.aiDate || "", 310) : p.expectedCalvingDate,
-        };
+        return { ...p, aiRecords: nextRecords, conceptionDate: conceivedRecord ? conceivedRecord.aiDate || p.conceptionDate : p.conceptionDate, expectedCalvingDate: conceivedRecord ? addDays(conceivedRecord.aiDate || "", 310) : p.expectedCalvingDate };
       });
       return { ...a, femaleDetails: { ...a.femaleDetails, reproductionParities: parities } };
     });
   }
-
   function incrementReproParity() {
     patchSelected((a) => {
-      const current = Number(a.femaleDetails.selectedReproParity || 0) + 1;
-      const next = String(current);
+      const current = Number(a.femaleDetails.selectedReproParity || 0) + 1, next = String(current);
       const exists = a.femaleDetails.reproductionParities.some((p) => p.parityNo === next);
-      return {
-        ...a,
-        femaleDetails: {
-          ...a.femaleDetails,
-          selectedReproParity: next,
-          reproductionParities: exists ? a.femaleDetails.reproductionParities : [...a.femaleDetails.reproductionParities, makeReproParity(next)],
-        },
-      };
+      return { ...a, femaleDetails: { ...a.femaleDetails, selectedReproParity: next, reproductionParities: exists ? a.femaleDetails.reproductionParities : [...a.femaleDetails.reproductionParities, makeReproParity(next)] } };
     });
   }
-
-  function decrementReproParity() {
-    patchSelected((a) => ({
-      ...a,
-      femaleDetails: { ...a.femaleDetails, selectedReproParity: String(Math.max(0, Number(a.femaleDetails.selectedReproParity || 0) - 1)) },
-    }));
-  }
-
+  function decrementReproParity() { patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, selectedReproParity: String(Math.max(0, Number(a.femaleDetails.selectedReproParity || 0) - 1)) } })); }
   function updateCalvingParity(idx, key, value) {
     patchSelected((a) => {
       const next = a.femaleDetails.calvingParities.map((p, i) => {
         if (i !== idx) return p;
         const row = { ...p, [key]: value };
-        if (key === "calvingDate" || key === "calvingOutcome") {
-          row.calfSire = row.calvingOutcome === "Normal calving" ? (getCalfSireForCalving(a, row.parityNo) || row.calfSire || "") : "";
-        }
-        if (key === "calvingOutcome" && value !== "Normal calving") {
-          row.calfSex = "";
-          row.calfTag = "";
-          row.calfSire = "";
-        }
+        if (key === "calvingDate" || key === "calvingOutcome") row.calfSire = row.calvingOutcome === "Normal calving" ? (getCalfSireForCalving(a, row.parityNo) || row.calfSire || "") : "";
+        if (key === "calvingOutcome" && value !== "Normal calving") { row.calfSex = ""; row.calfTag = ""; row.calfSire = ""; }
         return row;
       });
-
       let productionLactations = a.femaleDetails.productionLactations.map((l) => {
-        const calving = next.find((c) => c.parityNo === l.parityNo);
-        return { ...l, calvingDate: calving?.calvingDate || l.calvingDate || "" };
+        const calving = next.find((c) => c.parityNo === l.parityNo); return { ...l, calvingDate: calving?.calvingDate || l.calvingDate || "" };
       });
-
       productionLactations = productionLactations.map((l) => {
         if (l.entryMode === "Friday Records" && !(l.fridayRecords || []).length) {
-          const autoDate = firstRecordableFriday(l.calvingDate);
-          if (autoDate) return { ...l, fridayRecords: [makeFridayRecord(autoDate)] };
+          const autoDate = firstRecordableFriday(l.calvingDate); if (autoDate) return { ...l, fridayRecords: [makeFridayRecord(autoDate)] };
         }
         return l;
       });
-
-      return {
-        ...a,
-        preCalvingLifecycle: getFemaleLifecycle(a),
-        femaleDetails: { ...a.femaleDetails, calvingParities: next, productionLactations },
-      };
+      return { ...a, preCalvingLifecycle: getFemaleLifecycle(a), femaleDetails: { ...a.femaleDetails, calvingParities: next, productionLactations } };
     });
   }
-
   function addCalvingParity() {
     patchSelected((a) => {
       const nextNo = String(a.femaleDetails.calvingParities.length + 1);
       const prodExists = a.femaleDetails.productionLactations.some((l) => l.parityNo === nextNo);
-      return {
-        ...a,
-        femaleDetails: {
-          ...a.femaleDetails,
-          calvingParities: [...a.femaleDetails.calvingParities, makeCalvingParity(nextNo)],
-          productionLactations: prodExists ? a.femaleDetails.productionLactations : [...a.femaleDetails.productionLactations, makeProductionLactation(nextNo)],
-        },
-      };
+      return { ...a, femaleDetails: { ...a.femaleDetails, calvingParities: [...a.femaleDetails.calvingParities, makeCalvingParity(nextNo)], productionLactations: prodExists ? a.femaleDetails.productionLactations : [...a.femaleDetails.productionLactations, makeProductionLactation(nextNo)] } };
     });
   }
-
-  function removeCalvingParity() {
-    patchSelected((a) => ({
-      ...a,
-      femaleDetails: {
-        ...a.femaleDetails,
-        calvingParities: a.femaleDetails.calvingParities.length > 1 ? a.femaleDetails.calvingParities.slice(0, -1) : a.femaleDetails.calvingParities,
-      },
-    }));
-  }
-
-  function selectProductionParity(value) {
-    patchSelected((a) => ({
-      ...a,
-      femaleDetails: { ...a.femaleDetails, selectedProductionParity: String(value) },
-    }));
-  }
-
+  function removeCalvingParity() { patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, calvingParities: a.femaleDetails.calvingParities.length > 1 ? a.femaleDetails.calvingParities.slice(0, -1) : a.femaleDetails.calvingParities } })); }
+  function selectProductionParity(value) { patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, selectedProductionParity: String(value) } })); }
   function updateSelectedLactation(key, value) {
     patchSelected((a) => {
       const currentParity = a.femaleDetails.selectedProductionParity;
-      let lactations = a.femaleDetails.productionLactations.map((l) =>
-        l.parityNo === currentParity ? { ...l, [key]: value } : l
-      );
-
+      let lactations = a.femaleDetails.productionLactations.map((l) => l.parityNo === currentParity ? { ...l, [key]: value } : l);
       if (key === "entryMode" && value === "Friday Records") {
         lactations = lactations.map((l) => {
           if (l.parityNo !== currentParity) return l;
@@ -754,99 +430,20 @@ export default function AnimalDataRecordingApp() {
           return autoDate ? { ...l, fridayRecords: [makeFridayRecord(autoDate)] } : l;
         });
       }
-
       return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
     });
   }
-
-  function updateManualSummary(key, value) {
-    patchSelected((a) => {
-      const currentParity = a.femaleDetails.selectedProductionParity;
-      const lactations = a.femaleDetails.productionLactations.map((l) =>
-        l.parityNo === currentParity ? { ...l, manualSummary: { ...l.manualSummary, [key]: value } } : l
-      );
-      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
-    });
-  }
-
-  function addFridayRecord() {
-    patchSelected((a) => {
-      const currentParity = a.femaleDetails.selectedProductionParity;
-      const lactations = a.femaleDetails.productionLactations.map((l) =>
-        l.parityNo === currentParity
-          ? { ...l, fridayRecords: [...l.fridayRecords, makeFridayRecord(getNextFridayRecordDate(l))] }
-          : l
-      );
-      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
-    });
-  }
-
-  function removeFridayRecord() {
-    patchSelected((a) => {
-      const currentParity = a.femaleDetails.selectedProductionParity;
-      const lactations = a.femaleDetails.productionLactations.map((l) =>
-        l.parityNo === currentParity ? { ...l, fridayRecords: l.fridayRecords.slice(0, -1) } : l
-      );
-      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
-    });
-  }
-
-  function updateFridayRecord(idx, key, value) {
-    patchSelected((a) => {
-      const currentParity = a.femaleDetails.selectedProductionParity;
-      const lactations = a.femaleDetails.productionLactations.map((l) => {
-        if (l.parityNo !== currentParity) return l;
-        const records = l.fridayRecords.map((r, i) => i === idx ? recalcFridayRecord({ ...r, [key]: value }) : r);
-        return { ...l, fridayRecords: records };
-      });
-      return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } };
-    });
-  }
-
+  function updateManualSummary(key, value) { patchSelected((a) => { const currentParity = a.femaleDetails.selectedProductionParity; const lactations = a.femaleDetails.productionLactations.map((l) => l.parityNo === currentParity ? { ...l, manualSummary: { ...l.manualSummary, [key]: value } } : l); return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } }; }); }
+  function addFridayRecord() { patchSelected((a) => { const currentParity = a.femaleDetails.selectedProductionParity; const lactations = a.femaleDetails.productionLactations.map((l) => l.parityNo === currentParity ? { ...l, fridayRecords: [...l.fridayRecords, makeFridayRecord(getNextFridayRecordDate(l))] } : l); return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } }; }); }
+  function removeFridayRecord() { patchSelected((a) => { const currentParity = a.femaleDetails.selectedProductionParity; const lactations = a.femaleDetails.productionLactations.map((l) => l.parityNo === currentParity ? { ...l, fridayRecords: l.fridayRecords.slice(0, -1) } : l); return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } }; }); }
+  function updateFridayRecord(idx, key, value) { patchSelected((a) => { const currentParity = a.femaleDetails.selectedProductionParity; const lactations = a.femaleDetails.productionLactations.map((l) => { if (l.parityNo !== currentParity) return l; const records = l.fridayRecords.map((r, i) => i === idx ? recalcFridayRecord({ ...r, [key]: value }) : r); return { ...l, fridayRecords: records }; }); return { ...a, femaleDetails: { ...a.femaleDetails, productionLactations: lactations } }; }); }
   function addHealthRecord(section) {
-    const makers = {
-      bodyWeightRecords: makeBodyWeightRecord,
-      dewormingRecords: makeDewormingRecord,
-      vaccinationRecords: makeVaccinationRecord,
-      treatmentRecords: makeTreatmentRecord,
-    };
-    patchSelected((a) => ({
-      ...a,
-      femaleDetails: {
-        ...a.femaleDetails,
-        health: {
-          ...a.femaleDetails.health,
-          [section]: [...a.femaleDetails.health[section], makers[section]()],
-        },
-      },
-    }));
+    const makers = { bodyWeightRecords: makeBodyWeightRecord, dewormingRecords: makeDewormingRecord, vaccinationRecords: makeVaccinationRecord, treatmentRecords: makeTreatmentRecord };
+    patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, health: { ...a.femaleDetails.health, [section]: [...a.femaleDetails.health[section], makers[section]()] } } }));
   }
-
-  function removeHealthRecord(section) {
-    patchSelected((a) => ({
-      ...a,
-      femaleDetails: {
-        ...a.femaleDetails,
-        health: {
-          ...a.femaleDetails.health,
-          [section]: a.femaleDetails.health[section].length > 1 ? a.femaleDetails.health[section].slice(0, -1) : a.femaleDetails.health[section],
-        },
-      },
-    }));
-  }
-
-  function updateHealthRecord(section, idx, key, value) {
-    patchSelected((a) => ({
-      ...a,
-      femaleDetails: {
-        ...a.femaleDetails,
-        health: {
-          ...a.femaleDetails.health,
-          [section]: a.femaleDetails.health[section].map((r, i) => i === idx ? { ...r, [key]: value } : r),
-        },
-      },
-    }));
-  }
+  function removeHealthRecord(section) { patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, health: { ...a.femaleDetails.health, [section]: a.femaleDetails.health[section].length > 1 ? a.femaleDetails.health[section].slice(0, -1) : a.femaleDetails.health[section] } } })); }
+  function updateHealthRecord(section, idx, key, value) { patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, health: { ...a.femaleDetails.health, [section]: a.femaleDetails.health[section].map((r, i) => i === idx ? { ...r, [key]: value } : r) } } })); }
+  function updateHistoryMeta(key, value) { patchSelected((a) => ({ ...a, femaleDetails: { ...a.femaleDetails, historyMeta: { ...a.femaleDetails.historyMeta, [key]: value } } })); }
 
   const currentList = herdView === "current" ? filteredCurrentAnimals : filteredArchivedAnimals;
 
@@ -857,9 +454,12 @@ export default function AnimalDataRecordingApp() {
           <div className="topbar">
             <div>
               <div className="title">Buffalo Animal Data Recording App</div>
-              <div className="subtitle">Phase 2.4 patch · female health tab with 4 sub-tabs</div>
+              <div className="subtitle">Phase 2.5 patch · female history sheet and PDF export</div>
             </div>
-            <button className="primary-btn" onClick={() => setShowAdd(true)}>Add Animal</button>
+            <div className="action-row">
+              <button className="primary-btn" onClick={() => setShowAdd(true)}>Add Animal</button>
+              {selectedAnimal?.category === "Female" && <button className="secondary-btn" onClick={() => exportHistoryPdf(selectedAnimal)}>Export History PDF</button>}
+            </div>
           </div>
         </div>
 
@@ -875,9 +475,7 @@ export default function AnimalDataRecordingApp() {
               {newAnimal.category === "Male" && (
                 <>
                   <SelectField label="Selected for breeding" value={newAnimal.isBreedingBull || "No"} onChange={(v) => setNewAnimal((s) => normalizeAnimalFormData({ ...s, isBreedingBull: v }))} options={["No", "Yes"]} />
-                  {newAnimal.isBreedingBull === "Yes" && (
-                    <TextField label="Included as breeding in which set (Roman numerals only)" value={newAnimal.breedingSet || ""} onChange={(v) => setNewAnimal((s) => ({ ...s, breedingSet: normalizeRomanInput(v) }))} />
-                  )}
+                  {newAnimal.isBreedingBull === "Yes" && <TextField label="Included as breeding in which set (Roman numerals only)" value={newAnimal.breedingSet || ""} onChange={(v) => setNewAnimal((s) => ({ ...s, breedingSet: normalizeRomanInput(v) }))} />}
                 </>
               )}
               {newAnimal.status !== "Active (present in herd)" && (
@@ -917,9 +515,7 @@ export default function AnimalDataRecordingApp() {
               {currentList.map((animal) => (
                 <button key={animal.id} className={`animal-card ${selectedId === animal.id ? "selected" : ""}`} onClick={() => { setSelectedId(animal.id); setDetailTab("pedigree"); }}>
                   <div className="animal-title">{animal.tagNo}</div>
-                  <div className="animal-sub">
-                    {animal.breed} · {animal.category === "Female" ? getFemaleLifecycle(animal) : animal.isBreedingBull === "Yes" ? `Breeding Bull (${animal.breedingSet || "Set blank"})` : "Male"}
-                  </div>
+                  <div className="animal-sub">{animal.breed} · {animal.category === "Female" ? getFemaleLifecycle(animal) : animal.isBreedingBull === "Yes" ? `Breeding Bull (${animal.breedingSet || "Set blank"})` : "Male"}</div>
                 </button>
               ))}
             </div>
@@ -973,19 +569,12 @@ export default function AnimalDataRecordingApp() {
 
                 {detailTab === "reproduction" && selectedReproParity && (
                   <div className="stack-gap">
-                    <div className="parity-head">
-                      <div className="parity-controls">
-                        <button className="secondary-btn square-btn" onClick={decrementReproParity}>−</button>
-                        <div className="parity-box">{selectedAnimal.femaleDetails.selectedReproParity}</div>
-                        <button className="secondary-btn square-btn" onClick={incrementReproParity}>+</button>
-                      </div>
-                    </div>
+                    <div className="parity-head"><div className="parity-controls"><button className="secondary-btn square-btn" onClick={decrementReproParity}>−</button><div className="parity-box">{selectedAnimal.femaleDetails.selectedReproParity}</div><button className="secondary-btn square-btn" onClick={incrementReproParity}>+</button></div></div>
                     <Grid>
                       <TextField label="Conception date" value={selectedReproParity.conceptionDate || ""} onChange={(v) => updateSelectedRepro("conceptionDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
                       <TextField label="Expected calving date" value={selectedReproParity.expectedCalvingDate || ""} onChange={() => {}} readOnly />
                       <TextAreaField label="Remarks" value={selectedReproParity.remarks || ""} onChange={(v) => updateSelectedRepro("remarks", v)} />
                     </Grid>
-
                     <div className="subsection-label">AI records</div>
                     {(selectedReproParity.aiRecords || []).length === 0 && <div className="empty-note">No AI records yet.</div>}
                     {(selectedReproParity.aiRecords || []).map((rec, idx) => (
@@ -998,10 +587,7 @@ export default function AnimalDataRecordingApp() {
                         </Grid>
                       </div>
                     ))}
-                    <div className="action-row">
-                      <button className="primary-btn" onClick={addAIRecord}>Add AI record</button>
-                      <button className="secondary-btn" onClick={removeAIRecord}>Remove last AI</button>
-                    </div>
+                    <div className="action-row"><button className="primary-btn" onClick={addAIRecord}>Add AI record</button><button className="secondary-btn" onClick={removeAIRecord}>Remove last AI</button></div>
                   </div>
                 )}
 
@@ -1027,22 +613,14 @@ export default function AnimalDataRecordingApp() {
                         </div>
                       );
                     })}
-                    <div className="action-row">
-                      <button className="primary-btn" onClick={addCalvingParity}>Add calving parity</button>
-                      <button className="secondary-btn" onClick={removeCalvingParity}>Remove last parity</button>
-                    </div>
+                    <div className="action-row"><button className="primary-btn" onClick={addCalvingParity}>Add calving parity</button><button className="secondary-btn" onClick={removeCalvingParity}>Remove last parity</button></div>
                   </div>
                 )}
 
                 {detailTab === "production" && selectedLactation && (
                   <div className="stack-gap">
                     <Grid>
-                      <SelectField
-                        label="Select parity"
-                        value={selectedAnimal.femaleDetails.selectedProductionParity}
-                        onChange={selectProductionParity}
-                        options={selectedAnimal.femaleDetails.productionLactations.map((l) => l.parityNo)}
-                      />
+                      <SelectField label="Select parity" value={selectedAnimal.femaleDetails.selectedProductionParity} onChange={selectProductionParity} options={selectedAnimal.femaleDetails.productionLactations.map((l) => l.parityNo)} />
                       <TextField label="Calving date" value={selectedLactation.calvingDate || ""} onChange={() => {}} readOnly />
                       <TextField label="Dry date" value={selectedLactation.dryDate || ""} onChange={(v) => updateSelectedLactation("dryDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
                       <SelectField label="Entry mode" value={selectedLactation.entryMode || "Manual"} onChange={(v) => updateSelectedLactation("entryMode", v)} options={ENTRY_MODES} />
@@ -1071,10 +649,7 @@ export default function AnimalDataRecordingApp() {
                             </Grid>
                           </div>
                         ))}
-                        <div className="action-row">
-                          <button className="primary-btn" onClick={addFridayRecord}>Add Friday record</button>
-                          <button className="secondary-btn" onClick={removeFridayRecord}>Remove last Friday</button>
-                        </div>
+                        <div className="action-row"><button className="primary-btn" onClick={addFridayRecord}>Add Friday record</button><button className="secondary-btn" onClick={removeFridayRecord}>Remove last Friday</button></div>
                       </div>
                     )}
 
@@ -1090,81 +665,40 @@ export default function AnimalDataRecordingApp() {
                 {detailTab === "health" && (
                   <div className="stack-gap">
                     <div className="tab-row">
-                      {HEALTH_SUBTABS.map((tab) => (
-                        <button key={tab.id} className={healthSubTab === tab.id ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setHealthSubTab(tab.id)}>
-                          {tab.label}
-                        </button>
-                      ))}
+                      {HEALTH_SUBTABS.map((tab) => <button key={tab.id} className={healthSubTab === tab.id ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setHealthSubTab(tab.id)}>{tab.label}</button>)}
                     </div>
 
-                    {healthSubTab === "bodyWeight" && (
-                      <div className="stack-gap">
-                        {selectedAnimal.femaleDetails.health.bodyWeightRecords.map((r, idx) => (
-                          <div key={`bw-${idx}`} className="mini-card">
-                            <Grid>
-                              <TextField label="Recording date" value={r.recordDate || ""} onChange={(v) => updateHealthRecord("bodyWeightRecords", idx, "recordDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
-                              <TextField label="Body weight" value={r.bodyWeight || ""} onChange={(v) => updateHealthRecord("bodyWeightRecords", idx, "bodyWeight", v)} />
-                            </Grid>
-                          </div>
-                        ))}
-                        <div className="action-row">
-                          <button className="primary-btn" onClick={() => addHealthRecord("bodyWeightRecords")}>+</button>
-                          <button className="secondary-btn" onClick={() => removeHealthRecord("bodyWeightRecords")}>−</button>
-                        </div>
-                      </div>
-                    )}
+                    {healthSubTab === "bodyWeight" && <div className="stack-gap">{selectedAnimal.femaleDetails.health.bodyWeightRecords.map((r, idx) => <div key={`bw-${idx}`} className="mini-card"><Grid><TextField label="Recording date" value={r.recordDate || ""} onChange={(v) => updateHealthRecord("bodyWeightRecords", idx, "recordDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" /><TextField label="Body weight" value={r.bodyWeight || ""} onChange={(v) => updateHealthRecord("bodyWeightRecords", idx, "bodyWeight", v)} /></Grid></div>)}<div className="action-row"><button className="primary-btn" onClick={() => addHealthRecord("bodyWeightRecords")}>+</button><button className="secondary-btn" onClick={() => removeHealthRecord("bodyWeightRecords")}>−</button></div></div>}
+                    {healthSubTab === "deworming" && <div className="stack-gap">{selectedAnimal.femaleDetails.health.dewormingRecords.map((r, idx) => <div key={`dw-${idx}`} className="mini-card"><Grid><TextField label="Deworming date" value={r.dewormingDate || ""} onChange={(v) => updateHealthRecord("dewormingRecords", idx, "dewormingDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" /><TextField label="Anthelmintic used" value={r.anthelminticUsed || ""} onChange={(v) => updateHealthRecord("dewormingRecords", idx, "anthelminticUsed", v)} /></Grid></div>)}<div className="action-row"><button className="primary-btn" onClick={() => addHealthRecord("dewormingRecords")}>+</button><button className="secondary-btn" onClick={() => removeHealthRecord("dewormingRecords")}>−</button></div></div>}
+                    {healthSubTab === "vaccination" && <div className="stack-gap">{selectedAnimal.femaleDetails.health.vaccinationRecords.map((r, idx) => <div key={`vx-${idx}`} className="mini-card"><Grid><TextField label="Vaccination date" value={r.vaccinationDate || ""} onChange={(v) => updateHealthRecord("vaccinationRecords", idx, "vaccinationDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" /><TextField label="Vaccine used" value={r.vaccineUsed || ""} onChange={(v) => updateHealthRecord("vaccinationRecords", idx, "vaccineUsed", v)} /></Grid></div>)}<div className="action-row"><button className="primary-btn" onClick={() => addHealthRecord("vaccinationRecords")}>+</button><button className="secondary-btn" onClick={() => removeHealthRecord("vaccinationRecords")}>−</button></div></div>}
+                    {healthSubTab === "treatment" && <div className="stack-gap">{selectedAnimal.femaleDetails.health.treatmentRecords.map((r, idx) => <div key={`tx-${idx}`} className="mini-card"><Grid><TextField label="Treatment date" value={r.treatmentDate || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "treatmentDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" /><TextField label="Diagnosis" value={r.diagnosis || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "diagnosis", v)} /><TextAreaField label="Treatment given" value={r.treatmentGiven || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "treatmentGiven", v)} /></Grid></div>)}<div className="action-row"><button className="primary-btn" onClick={() => addHealthRecord("treatmentRecords")}>+</button><button className="secondary-btn" onClick={() => removeHealthRecord("treatmentRecords")}>−</button></div></div>}
+                  </div>
+                )}
 
-                    {healthSubTab === "deworming" && (
-                      <div className="stack-gap">
-                        {selectedAnimal.femaleDetails.health.dewormingRecords.map((r, idx) => (
-                          <div key={`dw-${idx}`} className="mini-card">
-                            <Grid>
-                              <TextField label="Deworming date" value={r.dewormingDate || ""} onChange={(v) => updateHealthRecord("dewormingRecords", idx, "dewormingDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
-                              <TextField label="Anthelmintic used" value={r.anthelminticUsed || ""} onChange={(v) => updateHealthRecord("dewormingRecords", idx, "anthelminticUsed", v)} />
-                            </Grid>
-                          </div>
-                        ))}
-                        <div className="action-row">
-                          <button className="primary-btn" onClick={() => addHealthRecord("dewormingRecords")}>+</button>
-                          <button className="secondary-btn" onClick={() => removeHealthRecord("dewormingRecords")}>−</button>
-                        </div>
-                      </div>
-                    )}
-
-                    {healthSubTab === "vaccination" && (
-                      <div className="stack-gap">
-                        {selectedAnimal.femaleDetails.health.vaccinationRecords.map((r, idx) => (
-                          <div key={`vx-${idx}`} className="mini-card">
-                            <Grid>
-                              <TextField label="Vaccination date" value={r.vaccinationDate || ""} onChange={(v) => updateHealthRecord("vaccinationRecords", idx, "vaccinationDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
-                              <TextField label="Vaccine used" value={r.vaccineUsed || ""} onChange={(v) => updateHealthRecord("vaccinationRecords", idx, "vaccineUsed", v)} />
-                            </Grid>
-                          </div>
-                        ))}
-                        <div className="action-row">
-                          <button className="primary-btn" onClick={() => addHealthRecord("vaccinationRecords")}>+</button>
-                          <button className="secondary-btn" onClick={() => removeHealthRecord("vaccinationRecords")}>−</button>
-                        </div>
-                      </div>
-                    )}
-
-                    {healthSubTab === "treatment" && (
-                      <div className="stack-gap">
-                        {selectedAnimal.femaleDetails.health.treatmentRecords.map((r, idx) => (
-                          <div key={`tx-${idx}`} className="mini-card">
-                            <Grid>
-                              <TextField label="Treatment date" value={r.treatmentDate || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "treatmentDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
-                              <TextField label="Diagnosis" value={r.diagnosis || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "diagnosis", v)} />
-                              <TextAreaField label="Treatment given" value={r.treatmentGiven || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "treatmentGiven", v)} />
-                            </Grid>
-                          </div>
-                        ))}
-                        <div className="action-row">
-                          <button className="primary-btn" onClick={() => addHealthRecord("treatmentRecords")}>+</button>
-                          <button className="secondary-btn" onClick={() => removeHealthRecord("treatmentRecords")}>−</button>
-                        </div>
-                      </div>
-                    )}
+                {detailTab === "history" && (
+                  <div className="stack-gap">
+                    <Grid>
+                      <TextField label="Reason for culling" value={selectedAnimal.femaleDetails.historyMeta.reasonForCulling || ""} onChange={(v) => updateHistoryMeta("reasonForCulling", v)} />
+                      <TextField label="Book value" value={selectedAnimal.femaleDetails.historyMeta.bookValue || ""} onChange={(v) => updateHistoryMeta("bookValue", v)} />
+                      <TextField label="AFC (days)" value={computeCalvingMetrics(selectedAnimal, 1).afc || ""} onChange={() => {}} readOnly />
+                    </Grid>
+                    <div className="table-wrap">
+                      <table className="history-table">
+                        <thead>
+                          <tr>
+                            <th>Parity</th><th>Date Calved</th><th>GP</th><th>Sex of Calf</th><th>Tag No. of Calf</th><th>Date of 1st AI</th><th>Date of Conception</th><th>Bull No./Set No.</th><th>Total AI</th><th>Dry Date</th><th>TLMY</th><th>SLMY</th><th>LL</th><th>PY</th><th>SP</th><th>CI</th><th>Fat %</th><th>SNF %</th><th>TS %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {historyRows.map((row, idx) => (
+                            <tr key={`hist-${idx}`}>
+                              <td>{row.parity}</td><td>{row.dateCalved}</td><td>{row.gp}</td><td>{row.sexOfCalf}</td><td>{row.calfTag}</td><td>{row.firstAI}</td><td>{row.conceptionDate}</td><td>{row.bullNo}</td><td>{row.totalAI}</td><td>{row.dryDate}</td><td>{row.tlmy}</td><td>{row.slmy}</td><td>{row.ll}</td><td>{row.py}</td><td>{row.sp}</td><td>{row.ci}</td><td>{row.fat}</td><td>{row.snf}</td><td>{row.ts}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="action-row"><button className="primary-btn" onClick={() => exportHistoryPdf(selectedAnimal)}>Export History PDF</button></div>
                   </div>
                 )}
               </Section>

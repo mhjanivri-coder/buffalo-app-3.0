@@ -1,3 +1,3 @@
-# Phase 2.4 patch
+# Phase 2.5 patch
 
-Adds female health tab with body weight, deworming, vaccination, and treatment sub-tabs.
+Adds female history sheet and PDF export.
