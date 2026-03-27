@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { isSupabaseConfigured, supabase } from "./supabaseClient";
+import { getCurrentSession, isSupabaseConfigured, supabase } from "./supabaseClient";
 
 const BREEDS = ["Murrah buffalo", "Nili-Ravi buffalo"];
 const SEX_OPTIONS = ["Female", "Male"];
@@ -567,6 +567,16 @@ function mergeAnimalsByIdOrTag(existing, incoming) {
   });
   return next;
 }
+
+function AuthField({ label, value, onChange, type = "text", placeholder = "" }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+}
+
 function Section({ title, children }) { return <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md"><div className="mb-3 text-lg font-semibold text-emerald-900">{title}</div>{children}</div>; }
 function Grid({ children }) { return <div className="grid grid-cols-1 gap-3 md:grid-cols-3">{children}</div>; }
 function TextField({ label, value, onChange, readOnly = false, placeholder = "" }) { return <label className="field"><span>{label}</span><input value={value} readOnly={readOnly} placeholder={placeholder} onChange={readOnly ? undefined : (e) => onChange(e.target.value)} /></label>; }
@@ -581,6 +591,98 @@ export default function AnimalDataRecordingApp() {
   });
   const [storageMode, setStorageMode] = useState(isSupabaseConfigured ? "Supabase + Local Backup" : "Browser Local Storage");
   const [isInitialSyncComplete, setIsInitialSyncComplete] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    async function bootstrapAuth() {
+      if (!isSupabaseConfigured || !supabase) {
+        if (mounted) {
+          setAuthUser({ email: "local@browser.storage" });
+          setIsAuthLoading(false);
+        }
+        return;
+      }
+      try {
+        const session = await getCurrentSession();
+        if (mounted) {
+          setAuthUser(session?.user || null);
+          setIsAuthLoading(false);
+        }
+      } catch (error) {
+        if (mounted) {
+          setAuthUser(null);
+          setIsAuthLoading(false);
+          setValidationMessage(`Auth setup issue. ${error?.message || ""}`.trim());
+        }
+      }
+    }
+
+    bootstrapAuth();
+
+    const subscription = supabase?.auth?.onAuthStateChange?.((_event, session) => {
+      setAuthUser(session?.user || null);
+      setIsAuthLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      try {
+        subscription?.data?.subscription?.unsubscribe?.();
+      } catch {}
+    };
+  }, [authUser, isAuthLoading]);
+
+  async function handleAuthSubmit() {
+    if (!isSupabaseConfigured || !supabase) {
+      setValidationMessage("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.");
+      return;
+    }
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setValidationMessage("Email and password are required.");
+      return;
+    }
+    setIsAuthLoading(true);
+    try {
+      if (authMode === "signin") {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        });
+        if (error) throw error;
+        setAuthUser(data?.user || null);
+        setValidationMessage("Signed in successfully.");
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+        });
+        if (error) throw error;
+        setAuthUser(data?.user || null);
+        setValidationMessage("Account created. Check email if confirmation is enabled.");
+      }
+      setAuthPassword("");
+    } catch (error) {
+      setValidationMessage(`Authentication failed. ${error?.message || ""}`.trim());
+    } finally {
+      setIsAuthLoading(false);
+    }
+  }
+
+  async function handleSignOut() {
+    if (!isSupabaseConfigured || !supabase) return;
+    setIsAuthLoading(true);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      setAuthUser(null);
+      setValidationMessage("Signed out.");
+    } catch (error) {
+      setValidationMessage(`Sign out failed. ${error?.message || ""}`.trim());
+    } finally {
+      setIsAuthLoading(false);
+    }
+  }
+
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -596,6 +698,11 @@ export default function AnimalDataRecordingApp() {
   const [archiveFilter, setArchiveFilter] = useState("All");
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const fileInputRef = useRef(null);
+  const [authMode, setAuthMode] = useState("signin");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authUser, setAuthUser] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
 
   const normalizedAnimals = useMemo(() => normalizeLineageAcrossHerd(animals.map(withDefaults)), [animals]);
   const activeAnimals = useMemo(() => normalizedAnimals.filter((a) => !isArchivedAnimal(a)), [normalizedAnimals]);
@@ -672,9 +779,18 @@ export default function AnimalDataRecordingApp() {
   useEffect(() => {
     let active = true;
     async function bootstrap() {
+      if (isSupabaseConfigured && isAuthLoading) return;
       if (!isSupabaseConfigured || !supabase) {
         if (active) {
           setStorageMode("Browser Local Storage");
+          setIsInitialSyncComplete(true);
+        }
+        return;
+      }
+      if (!authUser) {
+        if (active) {
+          setAnimals([]);
+          setStorageMode("Supabase (sign in required)");
           setIsInitialSyncComplete(true);
         }
         return;
@@ -705,7 +821,7 @@ export default function AnimalDataRecordingApp() {
   }, []);
 
   useEffect(() => {
-    if (!isInitialSyncComplete || !isSupabaseConfigured || !supabase) return;
+    if (!isInitialSyncComplete || !isSupabaseConfigured || !supabase || !authUser) return;
     let cancelled = false;
     async function pushAnimals() {
       try {
@@ -759,6 +875,7 @@ export default function AnimalDataRecordingApp() {
   const selectedLactation = selectedAnimal?.femaleDetails?.productionLactations?.find((l) => l.parityNo === selectedAnimal?.femaleDetails?.selectedProductionParity) || null;
   const productionMetrics = computeProductionMetrics(selectedLactation);
   const historyRows = selectedAnimal?.category === "Female" ? computeHistoryRows(selectedAnimal) : [];
+  const hasAppAccess = !isSupabaseConfigured || Boolean(authUser);
 
   const femaleProgenies = useMemo(() => {
     if (!selectedAnimal || selectedAnimal.category !== "Male" || selectedAnimal.isBreedingBull !== "Yes") return [];
@@ -1005,6 +1122,39 @@ export default function AnimalDataRecordingApp() {
           </div>
         </div>
 
+
+        {isSupabaseConfigured && (
+          <Section title="Supabase Access">
+            {isAuthLoading ? (
+              <div className="validation-box">Checking account access…</div>
+            ) : authUser ? (
+              <div className="action-row">
+                <div className="auth-status-card">
+                  <div className="auth-title">Signed in</div>
+                  <div className="auth-subtitle">{authUser.email}</div>
+                </div>
+                <button className="secondary-btn" onClick={handleSignOut}>Sign Out</button>
+              </div>
+            ) : (
+              <div className="stack-gap">
+                <div className="tab-row">
+                  <button className={authMode === "signin" ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setAuthMode("signin")}>Sign In</button>
+                  <button className={authMode === "signup" ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setAuthMode("signup")}>Create Account</button>
+                </div>
+                <Grid>
+                  <AuthField label="Email" value={authEmail} onChange={setAuthEmail} type="email" placeholder="you@example.com" />
+                  <AuthField label="Password" value={authPassword} onChange={setAuthPassword} type="password" placeholder="Enter password" />
+                </Grid>
+                <div className="action-row">
+                  <button className="primary-btn" onClick={handleAuthSubmit}>
+                    {authMode === "signin" ? "Sign In" : "Create Account"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </Section>
+        )}
+
         {validationMessage && (
           <Section title="Validation / Status">
             <div className="validation-box">{validationMessage}</div>
@@ -1012,6 +1162,12 @@ export default function AnimalDataRecordingApp() {
         )}
 
 
+        {!hasAppAccess && isSupabaseConfigured ? (
+          <Section title="Access Required">
+            <div className="validation-box">Sign in above to load and edit herd data stored in Supabase.</div>
+          </Section>
+        ) : (
+        <>
         <Section title="Phase 4.1 Command Center">
           <input
             ref={fileInputRef}
@@ -1021,6 +1177,7 @@ export default function AnimalDataRecordingApp() {
             onChange={handleImportBackup}
           />
           <div className="helper-note">Storage mode: {storageMode}</div>
+          <div className="helper-note">User: {authUser?.email || "Not signed in"}</div>
           <div className="action-row">
             <button className="secondary-btn" onClick={exportFullBackup}>Export Full Backup</button>
             <button className="secondary-btn" onClick={triggerImportBackup}>Import Backup</button>
@@ -1061,6 +1218,7 @@ export default function AnimalDataRecordingApp() {
             <strong> VITE_SUPABASE_URL </strong> and <strong> VITE_SUPABASE_ANON_KEY </strong> in Vercel.
             Create a table named <strong>buffalo_app_records</strong> with columns:
             <strong> id </strong> (text, primary key) and <strong> payload </strong> (jsonb).
+            Enable Email auth in Supabase Authentication if you want user login.
           </div>
           <div className="helper-note">
             Recommended SQL:
@@ -1513,9 +1671,12 @@ export default function AnimalDataRecordingApp() {
           </div>
         </div>
 
+        </>
+        )}
+
         <div className="mobile-sticky-bar">
-          <button className="primary-btn mobile-grow" onClick={() => setShowAdd(true)}>Add Animal</button>
-          <button className="secondary-btn mobile-grow" onClick={jumpToAnimalBySearch}>Jump</button>
+          <button className="primary-btn mobile-grow" onClick={() => setShowAdd(true)} disabled={!hasAppAccess}>Add Animal</button>
+          <button className="secondary-btn mobile-grow" onClick={jumpToAnimalBySearch} disabled={!hasAppAccess}>Jump</button>
         </div>
       </div>
     </div>

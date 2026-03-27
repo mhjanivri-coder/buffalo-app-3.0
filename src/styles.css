@@ -86,3 +86,8 @@ html, body, #root { margin: 0; min-height: 100%; font-family: Arial, Helvetica, 
 }
 
 .inline-code { display: inline-block; margin-left: 0.35rem; padding: 0.2rem 0.4rem; border-radius: 0.4rem; background: #ecfdf5; font-family: monospace; }
+
+.auth-status-card { border: 1px solid #a7f3d0; border-radius: 0.9rem; padding: 0.8rem 1rem; background: #ecfdf5; min-width: 260px; }
+.auth-title { font-weight: 700; color: #065f46; }
+.auth-subtitle { color: #475569; margin-top: 0.15rem; }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
