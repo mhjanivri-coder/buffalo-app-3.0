@@ -1,3 +1,3 @@
-# Phase 2.3 revised patch
+# Phase 2.4 patch
 
-Adds calving metrics (GP, AFC, SP, CI) and automatic Friday date generation.
+Adds female health tab with body weight, deworming, vaccination, and treatment sub-tabs.

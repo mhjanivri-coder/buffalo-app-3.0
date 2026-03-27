@@ -3,10 +3,16 @@ import React, { useMemo, useState } from "react";
 const BREEDS = ["Murrah buffalo", "Nili-Ravi buffalo"];
 const SEX_OPTIONS = ["Female", "Male"];
 const STATUS_OPTIONS = ["Active (present in herd)", "Dead", "Culled"];
-const FEMALE_TABS = ["pedigree", "reproduction", "calving", "production"];
+const FEMALE_TABS = ["pedigree", "reproduction", "calving", "production", "health"];
 const AI_RESULTS = ["Pending", "Negative", "Conceived"];
 const CALVING_OUTCOMES = ["Normal calving", "Stillbirth", "Abortion"];
 const ENTRY_MODES = ["Manual", "Friday Records"];
+const HEALTH_SUBTABS = [
+  { id: "bodyWeight", label: "Body Weight" },
+  { id: "deworming", label: "Deworming" },
+  { id: "vaccination", label: "Vaccination" },
+  { id: "treatment", label: "Treatment" },
+];
 const COLOSTRUM_DAYS = 5;
 
 const emptyAnimal = {
@@ -86,6 +92,22 @@ function makeProductionLactation(parityNo) {
     },
     fridayRecords: [],
   };
+}
+
+function makeBodyWeightRecord() {
+  return { recordDate: "", bodyWeight: "" };
+}
+
+function makeDewormingRecord() {
+  return { dewormingDate: "", anthelminticUsed: "" };
+}
+
+function makeVaccinationRecord() {
+  return { vaccinationDate: "", vaccineUsed: "" };
+}
+
+function makeTreatmentRecord() {
+  return { treatmentDate: "", diagnosis: "", treatmentGiven: "" };
 }
 
 function parseDisplayDate(value) {
@@ -201,6 +223,15 @@ function recalcFridayRecord(record) {
   return { ...record, totalDailyYield: hasMilkEntry ? String(total) : record.totalDailyYield || "" };
 }
 
+function defaultHealth() {
+  return {
+    bodyWeightRecords: [makeBodyWeightRecord()],
+    dewormingRecords: [makeDewormingRecord()],
+    vaccinationRecords: [makeVaccinationRecord()],
+    treatmentRecords: [makeTreatmentRecord()],
+  };
+}
+
 function withDefaults(animal) {
   return {
     ...animal,
@@ -222,6 +253,14 @@ function withDefaults(animal) {
           }))
         : [makeProductionLactation(1)],
       selectedProductionParity: animal.femaleDetails?.selectedProductionParity || "1",
+      health: {
+        ...defaultHealth(),
+        ...(animal.femaleDetails?.health || {}),
+        bodyWeightRecords: animal.femaleDetails?.health?.bodyWeightRecords?.length ? animal.femaleDetails.health.bodyWeightRecords.map((r) => ({ ...r })) : [makeBodyWeightRecord()],
+        dewormingRecords: animal.femaleDetails?.health?.dewormingRecords?.length ? animal.femaleDetails.health.dewormingRecords.map((r) => ({ ...r })) : [makeDewormingRecord()],
+        vaccinationRecords: animal.femaleDetails?.health?.vaccinationRecords?.length ? animal.femaleDetails.health.vaccinationRecords.map((r) => ({ ...r })) : [makeVaccinationRecord()],
+        treatmentRecords: animal.femaleDetails?.health?.treatmentRecords?.length ? animal.femaleDetails.health.treatmentRecords.map((r) => ({ ...r })) : [makeTreatmentRecord()],
+      },
     } : undefined,
     maleDetails: animal.category === "Male" ? {
       pedigree: { ...emptyPedigree, ...(animal.maleDetails?.pedigree || {}) },
@@ -317,6 +356,7 @@ function buildAutoCalfAnimal(dam, calvingParity) {
         calvingParities: [makeCalvingParity(1)],
         productionLactations: [makeProductionLactation(1)],
         selectedProductionParity: "1",
+        health: defaultHealth(),
       },
     });
   }
@@ -456,6 +496,7 @@ export default function AnimalDataRecordingApp() {
   const [selectedId, setSelectedId] = useState(null);
   const [herdView, setHerdView] = useState("current");
   const [detailTab, setDetailTab] = useState("pedigree");
+  const [healthSubTab, setHealthSubTab] = useState("bodyWeight");
   const [newAnimal, setNewAnimal] = useState({ ...emptyAnimal });
 
   const normalizedAnimals = useMemo(() => animals.map(withDefaults), [animals]);
@@ -516,6 +557,15 @@ export default function AnimalDataRecordingApp() {
       id: Date.now(),
       ...prepared,
       preCalvingLifecycle: prepared.category === "Female" ? "Heifer" : "",
+      femaleDetails: prepared.category === "Female" ? {
+        pedigree: { ...emptyPedigree },
+        reproductionParities: [makeReproParity(0)],
+        selectedReproParity: "0",
+        calvingParities: [makeCalvingParity(1)],
+        productionLactations: [makeProductionLactation(1)],
+        selectedProductionParity: "1",
+        health: defaultHealth(),
+      } : undefined,
     });
     setAnimals((prev) => [item, ...prev].sort(sortByTag));
     setSelectedId(item.id);
@@ -644,9 +694,7 @@ export default function AnimalDataRecordingApp() {
       productionLactations = productionLactations.map((l) => {
         if (l.entryMode === "Friday Records" && !(l.fridayRecords || []).length) {
           const autoDate = firstRecordableFriday(l.calvingDate);
-          if (autoDate) {
-            return { ...l, fridayRecords: [makeFridayRecord(autoDate)] };
-          }
+          if (autoDate) return { ...l, fridayRecords: [makeFridayRecord(autoDate)] };
         }
         return l;
       });
@@ -755,6 +803,51 @@ export default function AnimalDataRecordingApp() {
     });
   }
 
+  function addHealthRecord(section) {
+    const makers = {
+      bodyWeightRecords: makeBodyWeightRecord,
+      dewormingRecords: makeDewormingRecord,
+      vaccinationRecords: makeVaccinationRecord,
+      treatmentRecords: makeTreatmentRecord,
+    };
+    patchSelected((a) => ({
+      ...a,
+      femaleDetails: {
+        ...a.femaleDetails,
+        health: {
+          ...a.femaleDetails.health,
+          [section]: [...a.femaleDetails.health[section], makers[section]()],
+        },
+      },
+    }));
+  }
+
+  function removeHealthRecord(section) {
+    patchSelected((a) => ({
+      ...a,
+      femaleDetails: {
+        ...a.femaleDetails,
+        health: {
+          ...a.femaleDetails.health,
+          [section]: a.femaleDetails.health[section].length > 1 ? a.femaleDetails.health[section].slice(0, -1) : a.femaleDetails.health[section],
+        },
+      },
+    }));
+  }
+
+  function updateHealthRecord(section, idx, key, value) {
+    patchSelected((a) => ({
+      ...a,
+      femaleDetails: {
+        ...a.femaleDetails,
+        health: {
+          ...a.femaleDetails.health,
+          [section]: a.femaleDetails.health[section].map((r, i) => i === idx ? { ...r, [key]: value } : r),
+        },
+      },
+    }));
+  }
+
   const currentList = herdView === "current" ? filteredCurrentAnimals : filteredArchivedAnimals;
 
   return (
@@ -764,7 +857,7 @@ export default function AnimalDataRecordingApp() {
           <div className="topbar">
             <div>
               <div className="title">Buffalo Animal Data Recording App</div>
-              <div className="subtitle">Phase 2.3 revised patch · calving metrics + automatic Friday date generation</div>
+              <div className="subtitle">Phase 2.4 patch · female health tab with 4 sub-tabs</div>
             </div>
             <button className="primary-btn" onClick={() => setShowAdd(true)}>Add Animal</button>
           </div>
@@ -991,6 +1084,87 @@ export default function AnimalDataRecordingApp() {
                       <TextField label="Standard lactation milk" value={String(productionMetrics.standardLactationMilk || "")} onChange={() => {}} readOnly />
                       <TextField label="Peak yield" value={String(productionMetrics.peakYield || "")} onChange={() => {}} readOnly />
                     </Grid>
+                  </div>
+                )}
+
+                {detailTab === "health" && (
+                  <div className="stack-gap">
+                    <div className="tab-row">
+                      {HEALTH_SUBTABS.map((tab) => (
+                        <button key={tab.id} className={healthSubTab === tab.id ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setHealthSubTab(tab.id)}>
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {healthSubTab === "bodyWeight" && (
+                      <div className="stack-gap">
+                        {selectedAnimal.femaleDetails.health.bodyWeightRecords.map((r, idx) => (
+                          <div key={`bw-${idx}`} className="mini-card">
+                            <Grid>
+                              <TextField label="Recording date" value={r.recordDate || ""} onChange={(v) => updateHealthRecord("bodyWeightRecords", idx, "recordDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
+                              <TextField label="Body weight" value={r.bodyWeight || ""} onChange={(v) => updateHealthRecord("bodyWeightRecords", idx, "bodyWeight", v)} />
+                            </Grid>
+                          </div>
+                        ))}
+                        <div className="action-row">
+                          <button className="primary-btn" onClick={() => addHealthRecord("bodyWeightRecords")}>+</button>
+                          <button className="secondary-btn" onClick={() => removeHealthRecord("bodyWeightRecords")}>−</button>
+                        </div>
+                      </div>
+                    )}
+
+                    {healthSubTab === "deworming" && (
+                      <div className="stack-gap">
+                        {selectedAnimal.femaleDetails.health.dewormingRecords.map((r, idx) => (
+                          <div key={`dw-${idx}`} className="mini-card">
+                            <Grid>
+                              <TextField label="Deworming date" value={r.dewormingDate || ""} onChange={(v) => updateHealthRecord("dewormingRecords", idx, "dewormingDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
+                              <TextField label="Anthelmintic used" value={r.anthelminticUsed || ""} onChange={(v) => updateHealthRecord("dewormingRecords", idx, "anthelminticUsed", v)} />
+                            </Grid>
+                          </div>
+                        ))}
+                        <div className="action-row">
+                          <button className="primary-btn" onClick={() => addHealthRecord("dewormingRecords")}>+</button>
+                          <button className="secondary-btn" onClick={() => removeHealthRecord("dewormingRecords")}>−</button>
+                        </div>
+                      </div>
+                    )}
+
+                    {healthSubTab === "vaccination" && (
+                      <div className="stack-gap">
+                        {selectedAnimal.femaleDetails.health.vaccinationRecords.map((r, idx) => (
+                          <div key={`vx-${idx}`} className="mini-card">
+                            <Grid>
+                              <TextField label="Vaccination date" value={r.vaccinationDate || ""} onChange={(v) => updateHealthRecord("vaccinationRecords", idx, "vaccinationDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
+                              <TextField label="Vaccine used" value={r.vaccineUsed || ""} onChange={(v) => updateHealthRecord("vaccinationRecords", idx, "vaccineUsed", v)} />
+                            </Grid>
+                          </div>
+                        ))}
+                        <div className="action-row">
+                          <button className="primary-btn" onClick={() => addHealthRecord("vaccinationRecords")}>+</button>
+                          <button className="secondary-btn" onClick={() => removeHealthRecord("vaccinationRecords")}>−</button>
+                        </div>
+                      </div>
+                    )}
+
+                    {healthSubTab === "treatment" && (
+                      <div className="stack-gap">
+                        {selectedAnimal.femaleDetails.health.treatmentRecords.map((r, idx) => (
+                          <div key={`tx-${idx}`} className="mini-card">
+                            <Grid>
+                              <TextField label="Treatment date" value={r.treatmentDate || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "treatmentDate", normalizeDisplayDate(v))} placeholder="dd/mm/yyyy" />
+                              <TextField label="Diagnosis" value={r.diagnosis || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "diagnosis", v)} />
+                              <TextAreaField label="Treatment given" value={r.treatmentGiven || ""} onChange={(v) => updateHealthRecord("treatmentRecords", idx, "treatmentGiven", v)} />
+                            </Grid>
+                          </div>
+                        ))}
+                        <div className="action-row">
+                          <button className="primary-btn" onClick={() => addHealthRecord("treatmentRecords")}>+</button>
+                          <button className="secondary-btn" onClick={() => removeHealthRecord("treatmentRecords")}>−</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </Section>
