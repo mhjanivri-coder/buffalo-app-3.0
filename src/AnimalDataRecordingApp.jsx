@@ -438,6 +438,79 @@ function exportHistoryPdf(animal) {
   doc.save(`buffalo-history-sheet-${animal.tagNo || "animal"}.pdf`);
 }
 
+
+function validateAnimalForm(form) {
+  const errors = [];
+  if (!(form.tagNo || "").trim()) errors.push("Tag No. is required.");
+  if (form.category === "Male" && form.isBreedingBull === "Yes" && !(form.breedingSet || "").trim()) {
+    errors.push("Breeding set is required for breeding bulls.");
+  }
+  if (form.status !== "Active (present in herd)") {
+    if (!(form.exitDate || "").trim()) errors.push("Date of Death / Culling is required.");
+    if (!(form.exitReason || "").trim()) errors.push("Reason of Death / Culling is required.");
+  }
+  return errors;
+}
+
+function validateCurrentTab(selectedAnimal, detailTab) {
+  const errors = [];
+  if (!selectedAnimal || !detailTab) return errors;
+
+  if (selectedAnimal.category === "Female") {
+    if (detailTab === "pedigree") {
+      if (!(selectedAnimal.femaleDetails?.pedigree?.dam || "").trim()) errors.push("Female pedigree: Dam is required.");
+      if (!(selectedAnimal.femaleDetails?.pedigree?.sire || "").trim()) errors.push("Female pedigree: Sire is required.");
+    }
+    if (detailTab === "reproduction") {
+      const selectedRepro = selectedAnimal.femaleDetails?.reproductionParities?.find(
+        (p) => p.parityNo === selectedAnimal.femaleDetails?.selectedReproParity
+      );
+      if (selectedRepro) {
+        const aiRecords = selectedRepro.aiRecords || [];
+        if (aiRecords.length > 0) {
+          aiRecords.forEach((r, idx) => {
+            if (!(r.aiDate || "").trim()) errors.push(`Reproduction: AI ${idx + 1} date is required.`);
+            if (!(r.aiBullNo || "").trim()) errors.push(`Reproduction: AI ${idx + 1} Bull No. is required.`);
+          });
+        }
+      }
+    }
+    if (detailTab === "calving") {
+      (selectedAnimal.femaleDetails?.calvingParities || []).forEach((cp, idx) => {
+        if ((cp.calfTag || cp.calfSex || cp.calvingOutcome === "Normal calving") && !(cp.calvingDate || "").trim()) {
+          errors.push(`Calving parity ${idx + 1}: Calving date is required.`);
+        }
+      });
+    }
+    if (detailTab === "production") {
+      const selectedLactation = selectedAnimal.femaleDetails?.productionLactations?.find(
+        (l) => l.parityNo === selectedAnimal.femaleDetails?.selectedProductionParity
+      );
+      if (selectedLactation?.entryMode === "Friday Records") {
+        (selectedLactation.fridayRecords || []).forEach((r, idx) => {
+          if (!(r.date || "").trim()) errors.push(`Production: Friday ${idx + 1} date is required.`);
+        });
+      }
+    }
+  }
+
+  if (selectedAnimal.category === "Male" && selectedAnimal.isBreedingBull === "Yes") {
+    if (detailTab === "pedigree") {
+      if (!(selectedAnimal.maleDetails?.pedigree?.dam || "").trim()) errors.push("Bull pedigree: Dam is required.");
+      if (!(selectedAnimal.maleDetails?.pedigree?.sire || "").trim()) errors.push("Bull pedigree: Sire is required.");
+    }
+    if (detailTab === "disease testing") {
+      (selectedAnimal.maleDetails?.diseaseTests || []).forEach((r, idx) => {
+        if ((r.testName || r.result || r.testDate) && !(r.testDate || "").trim()) {
+          errors.push(`Disease testing row ${idx + 1}: Test date is required.`);
+        }
+      });
+    }
+  }
+
+  return errors;
+}
+
 function Section({ title, children }) { return <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md"><div className="mb-3 text-lg font-semibold text-emerald-900">{title}</div>{children}</div>; }
 function Grid({ children }) { return <div className="grid grid-cols-1 gap-3 md:grid-cols-3">{children}</div>; }
 function TextField({ label, value, onChange, readOnly = false, placeholder = "" }) { return <label className="field"><span>{label}</span><input value={value} readOnly={readOnly} placeholder={placeholder} onChange={readOnly ? undefined : (e) => onChange(e.target.value)} /></label>; }
@@ -458,6 +531,7 @@ export default function AnimalDataRecordingApp() {
   const [newAnimal, setNewAnimal] = useState({ ...emptyAnimal });
   const [isEditingAnimal, setIsEditingAnimal] = useState(false);
   const [editAnimalForm, setEditAnimalForm] = useState({ ...emptyAnimal });
+  const [validationMessage, setValidationMessage] = useState("");
 
   const normalizedAnimals = useMemo(() => normalizeLineageAcrossHerd(animals.map(withDefaults)), [animals]);
   const activeAnimals = useMemo(() => normalizedAnimals.filter((a) => !isArchivedAnimal(a)), [normalizedAnimals]);
@@ -510,8 +584,9 @@ export default function AnimalDataRecordingApp() {
   function handleFormStatusChange(status) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, status })); }
   function handleFormCategoryChange(category) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, category })); }
   function addAnimal() {
-    if (!newAnimal.tagNo.trim()) { alert("Please enter Tag No."); return; }
     const prepared = normalizeAnimalFormData(newAnimal);
+    const errors = validateAnimalForm(prepared);
+    if (errors.length) { setValidationMessage(errors.join(" ")); return; }
     const item = withDefaults({
       id: Date.now(),
       ...prepared,
@@ -522,6 +597,7 @@ export default function AnimalDataRecordingApp() {
     setAnimals((prev) => normalizeLineageAcrossHerd([item, ...prev]).sort(sortByTag));
     setSelectedId(item.id);
     setShowAdd(false);
+    setValidationMessage("");
     setNewAnimal({ ...emptyAnimal });
   }
   function openEditAnimal() {
@@ -538,11 +614,14 @@ export default function AnimalDataRecordingApp() {
       isBreedingBull: selectedAnimal.isBreedingBull || "No",
       breedingSet: selectedAnimal.breedingSet || "",
     });
+    setValidationMessage("");
     setIsEditingAnimal(true);
   }
   function saveEditedAnimal() {
     if (!selectedAnimal) return;
     const prepared = normalizeAnimalFormData(editAnimalForm);
+    const errors = validateAnimalForm(prepared);
+    if (errors.length) { setValidationMessage(errors.join(" ")); return; }
     setAnimals((prev) => {
       const oldTag = selectedAnimal.tagNo;
       const oldSet = selectedAnimal.breedingSet || "";
@@ -577,14 +656,27 @@ export default function AnimalDataRecordingApp() {
       });
       return normalizeLineageAcrossHerd(next).sort(sortByTag);
     });
+    setValidationMessage("");
     setIsEditingAnimal(false);
   }
   function goToNextTab() {
+    const errors = validateCurrentTab(selectedAnimal, detailTab);
+    if (errors.length) {
+      setValidationMessage(errors.join(" "));
+      return;
+    }
+    setValidationMessage("");
     const tabs = visibleTabs;
     const idx = tabs.indexOf(detailTab);
     if (idx >= 0 && idx < tabs.length - 1) setDetailTab(tabs[idx + 1]);
   }
   function submitTabs() {
+    const errors = validateCurrentTab(selectedAnimal, detailTab);
+    if (errors.length) {
+      setValidationMessage(errors.join(" "));
+      return;
+    }
+    setValidationMessage("Record submitted successfully.");
     alert("Record submitted.");
   }
   function renderTabFooter() {
@@ -692,6 +784,12 @@ export default function AnimalDataRecordingApp() {
           </div>
         </div>
 
+        {validationMessage && (
+          <Section title="Validation / Status">
+            <div className="validation-box">{validationMessage}</div>
+          </Section>
+        )}
+
         {showAdd && (
           <Section title="Add Animal">
             <Grid>
@@ -717,7 +815,7 @@ export default function AnimalDataRecordingApp() {
             </Grid>
             <div className="action-row">
               <button className="primary-btn" onClick={addAnimal}>Save Animal</button>
-              <button className="secondary-btn" onClick={() => { setShowAdd(false); setNewAnimal({ ...emptyAnimal }); }}>Cancel</button>
+              <button className="secondary-btn" onClick={() => { setShowAdd(false); setValidationMessage(""); setNewAnimal({ ...emptyAnimal }); }}>Cancel</button>
             </div>
           </Section>
         )}
@@ -747,7 +845,7 @@ export default function AnimalDataRecordingApp() {
             </Grid>
             <div className="action-row">
               <button className="primary-btn" onClick={saveEditedAnimal}>Save Animal</button>
-              <button className="secondary-btn" onClick={() => setIsEditingAnimal(false)}>Cancel</button>
+              <button className="secondary-btn" onClick={() => { setIsEditingAnimal(false); setValidationMessage(""); }}>Cancel</button>
             </div>
           </Section>
         )}
@@ -769,6 +867,8 @@ export default function AnimalDataRecordingApp() {
             <StatCard title="Archived" value={dashboardData.archivedCount} />
             <StatCard title="Breeding Bulls" value={dashboardData.breedingBulls.length} />
             <StatCard title="Pregnant Females" value={dashboardData.pregnantFemales} />
+            <StatCard title="Dead" value={normalizedAnimals.filter((a) => a.status === "Dead").length} />
+            <StatCard title="Culled" value={normalizedAnimals.filter((a) => a.status === "Culled").length} />
           </div>
         </Section>
 
@@ -782,7 +882,7 @@ export default function AnimalDataRecordingApp() {
             <div className="list-wrap">
               {currentList.length === 0 && <div className="empty-note">No animals found.</div>}
               {currentList.map((animal) => (
-                <button key={animal.id} className={`animal-card ${selectedId === animal.id ? "selected" : ""}`} onClick={() => { setSelectedId(animal.id); setDetailTab(animal.category === "Female" ? "pedigree" : animal.isBreedingBull === "Yes" ? "pedigree" : ""); }}>
+                <button key={animal.id} className={`animal-card ${selectedId === animal.id ? "selected" : ""}`} onClick={() => { setSelectedId(animal.id); setValidationMessage(""); setDetailTab(animal.category === "Female" ? "pedigree" : animal.isBreedingBull === "Yes" ? "pedigree" : ""); }}>
                   <div className="animal-title">{animal.tagNo}</div>
                   <div className="animal-sub">{animal.breed} · {animal.category === "Female" ? getFemaleLifecycle(animal) : animal.isBreedingBull === "Yes" ? `Breeding Bull (${animal.breedingSet || "Set blank"})` : "Male"}</div>
                 </button>

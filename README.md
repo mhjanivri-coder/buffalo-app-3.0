@@ -1,3 +1,3 @@
-# Phase 3.0 patch
+# Phase 3.1 patch
 
-Adds cleaner dashboards, export-ready breeding bull history sheet PDF, and stronger lineage visibility.
+Adds stricter validation for add/edit animal and tab progression, plus improved archive dashboard stats.
