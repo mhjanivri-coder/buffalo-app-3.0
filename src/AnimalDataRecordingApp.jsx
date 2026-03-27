@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { isSupabaseConfigured, supabase } from "./supabaseClient";
 
 const BREEDS = ["Murrah buffalo", "Nili-Ravi buffalo"];
 const SEX_OPTIONS = ["Female", "Male"];
@@ -513,6 +514,8 @@ function validateCurrentTab(selectedAnimal, detailTab) {
 
 
 const STORAGE_KEY = "buffalo_app_phase_4_data";
+const SUPABASE_TABLE = "buffalo_app_records";
+const SUPABASE_ROW_ID = "main";
 
 function safeParseAnimals(raw) {
   try {
@@ -523,6 +526,25 @@ function safeParseAnimals(raw) {
   }
 }
 
+
+async function loadAnimalsFromSupabase() {
+  if (!isSupabaseConfigured || !supabase) return null;
+  const { data, error } = await supabase
+    .from(SUPABASE_TABLE)
+    .select("payload")
+    .eq("id", SUPABASE_ROW_ID)
+    .maybeSingle();
+  if (error) throw error;
+  return Array.isArray(data?.payload) ? data.payload : [];
+}
+
+async function saveAnimalsToSupabase(animals) {
+  if (!isSupabaseConfigured || !supabase) return;
+  const { error } = await supabase
+    .from(SUPABASE_TABLE)
+    .upsert({ id: SUPABASE_ROW_ID, payload: animals }, { onConflict: "id" });
+  if (error) throw error;
+}
 function exportJsonBackup(data) {
   const payload = JSON.stringify(data, null, 2);
   const blob = new Blob([payload], { type: "application/json;charset=utf-8;" });
@@ -557,6 +579,8 @@ export default function AnimalDataRecordingApp() {
     if (typeof window === "undefined") return [];
     return safeParseAnimals(window.localStorage.getItem(STORAGE_KEY));
   });
+  const [storageMode, setStorageMode] = useState(isSupabaseConfigured ? "Supabase + Local Backup" : "Browser Local Storage");
+  const [isInitialSyncComplete, setIsInitialSyncComplete] = useState(false);
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -645,6 +669,57 @@ export default function AnimalDataRecordingApp() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(animals));
   }, [animals]);
 
+  useEffect(() => {
+    let active = true;
+    async function bootstrap() {
+      if (!isSupabaseConfigured || !supabase) {
+        if (active) {
+          setStorageMode("Browser Local Storage");
+          setIsInitialSyncComplete(true);
+        }
+        return;
+      }
+      try {
+        const remoteAnimals = await loadAnimalsFromSupabase();
+        if (!active) return;
+        const localAnimals = safeParseAnimals(window.localStorage.getItem(STORAGE_KEY));
+        const merged = normalizeLineageAcrossHerd(mergeAnimalsByIdOrTag(remoteAnimals || [], localAnimals || [])).sort(sortByTag);
+        setAnimals(merged);
+        if (merged.length && JSON.stringify(merged) !== JSON.stringify(remoteAnimals || [])) {
+          await saveAnimalsToSupabase(merged);
+        }
+        setStorageMode("Supabase + Local Backup");
+        setValidationMessage("Supabase storage connected.");
+      } catch (error) {
+        if (!active) return;
+        setStorageMode("Browser Local Storage (Supabase unavailable)");
+        setValidationMessage(`Supabase sync unavailable. Using browser storage only. ${error?.message || ""}`.trim());
+      } finally {
+        if (active) setIsInitialSyncComplete(true);
+      }
+    }
+    bootstrap();
+    return () => {
+      active = false
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isInitialSyncComplete || !isSupabaseConfigured || !supabase) return;
+    let cancelled = false;
+    async function pushAnimals() {
+      try {
+        await saveAnimalsToSupabase(animals);
+      } catch (error) {
+        console.error("Supabase save failed", error);
+      }
+    }
+    pushAnimals();
+    return () => {
+      cancelled = true;
+    };
+  }, [animals, isInitialSyncComplete]);
+
   function exportFullBackup() {
     exportJsonBackup(animals);
     setValidationMessage("Full JSON backup exported.");
@@ -655,7 +730,7 @@ export default function AnimalDataRecordingApp() {
     if (!confirmed) return;
     setAnimals([]);
     setSelectedId(null);
-    setValidationMessage("All locally saved data cleared.");
+    setValidationMessage(isSupabaseConfigured ? "Local browser data cleared. Use Sync Now to overwrite remote data if desired." : "All locally saved data cleared.");
   }
 
   function triggerImportBackup() {
@@ -673,7 +748,7 @@ export default function AnimalDataRecordingApp() {
         return;
       }
       setAnimals((prev) => normalizeLineageAcrossHerd(mergeAnimalsByIdOrTag(prev, incoming)).sort(sortByTag));
-      setValidationMessage(`Imported ${incoming.length} records from backup.`);
+      setValidationMessage(`Imported ${incoming.length} records from backup.${isSupabaseConfigured ? " Use Sync Now to push to database." : ""}`);
     };
     reader.readAsText(file);
     event.target.value = "";
@@ -937,7 +1012,7 @@ export default function AnimalDataRecordingApp() {
         )}
 
 
-        <Section title="Phase 4 Command Center">
+        <Section title="Phase 4.1 Command Center">
           <input
             ref={fileInputRef}
             type="file"
@@ -945,9 +1020,22 @@ export default function AnimalDataRecordingApp() {
             style={{ display: "none" }}
             onChange={handleImportBackup}
           />
+          <div className="helper-note">Storage mode: {storageMode}</div>
           <div className="action-row">
             <button className="secondary-btn" onClick={exportFullBackup}>Export Full Backup</button>
             <button className="secondary-btn" onClick={triggerImportBackup}>Import Backup</button>
+            <button className="secondary-btn" onClick={async () => {
+              if (!isSupabaseConfigured || !supabase) {
+                setValidationMessage("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.");
+                return;
+              }
+              try {
+                await saveAnimalsToSupabase(animals);
+                setValidationMessage("Data synced to Supabase.");
+              } catch (error) {
+                setValidationMessage(`Supabase sync failed. ${error?.message || ""}`.trim());
+              }
+            }}>Sync Now</button>
             <button className="secondary-btn" onClick={() => setMobilePanelOpen((v) => !v)}>
               {mobilePanelOpen ? "Hide Mobile Panel" : "Show Mobile Panel"}
             </button>
@@ -964,6 +1052,20 @@ export default function AnimalDataRecordingApp() {
               </div>
             </div>
           )}
+        </Section>
+
+
+        <Section title="Database Setup Guide">
+          <div className="helper-note">
+            To enable shared storage, create a Supabase project, then add environment variables
+            <strong> VITE_SUPABASE_URL </strong> and <strong> VITE_SUPABASE_ANON_KEY </strong> in Vercel.
+            Create a table named <strong>buffalo_app_records</strong> with columns:
+            <strong> id </strong> (text, primary key) and <strong> payload </strong> (jsonb).
+          </div>
+          <div className="helper-note">
+            Recommended SQL:
+            <code className="inline-code"> create table buffalo_app_records (id text primary key, payload jsonb not null default '[]'::jsonb); </code>
+          </div>
         </Section>
 
         {showAdd && (
