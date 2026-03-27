@@ -1,3 +1,3 @@
-# Phase 2.3 patch
+# Phase 2.3 revised patch
 
-Adds production tab, Friday records, and first recordable Friday rule.
+Adds calving metrics (GP, AFC, SP, CI) and automatic Friday date generation.

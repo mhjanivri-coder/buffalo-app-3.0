@@ -16,24 +16,18 @@ html, body, #root { margin: 0; min-height: 100%; font-family: Arial, Helvetica, 
 .topbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; }
 .title { font-size: 2rem; font-weight: 700; color: #064e3b; }
 .subtitle { margin-top: 0.25rem; color: #475569; }
-.primary-btn, .secondary-btn {
-  border-radius: 0.9rem; padding: 0.75rem 1rem; font: inherit; cursor: pointer; border: 1px solid #6ee7b7;
-}
+.primary-btn, .secondary-btn { border-radius: 0.9rem; padding: 0.75rem 1rem; font: inherit; cursor: pointer; border: 1px solid #6ee7b7; }
 .primary-btn { background: #059669; color: white; }
 .secondary-btn { background: white; color: #065f46; }
 .stats-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(1, minmax(0,1fr)); }
 .main-grid { display: grid; gap: 1.25rem; grid-template-columns: 1fr; }
 .right-stack { display: grid; gap: 1.25rem; }
 .field { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.95rem; }
-.field input, .field select, .field textarea {
-  width: 100%; border: 1px solid #a7f3d0; border-radius: 0.9rem; padding: 0.7rem 0.9rem; font: inherit; background: white;
-}
+.field input, .field select, .field textarea { width: 100%; border: 1px solid #a7f3d0; border-radius: 0.9rem; padding: 0.7rem 0.9rem; font: inherit; background: white; }
 .textarea-field { grid-column: span 1; }
 .action-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem; }
 .list-wrap { display: grid; gap: 0.75rem; margin-top: 1rem; }
-.animal-card {
-  text-align: left; border: 1px solid #d1fae5; border-radius: 1rem; padding: 0.85rem 1rem; background: white; cursor: pointer;
-}
+.animal-card { text-align: left; border: 1px solid #d1fae5; border-radius: 1rem; padding: 0.85rem 1rem; background: white; cursor: pointer; }
 .animal-card.selected { background: #ecfdf5; border-color: #059669; }
 .animal-title { font-weight: 700; }
 .animal-sub { color: #475569; font-size: 0.92rem; margin-top: 0.2rem; }
