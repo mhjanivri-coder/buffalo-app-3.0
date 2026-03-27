@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo, useState } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { getCurrentSession, isSupabaseConfigured, supabase } from "./supabaseClient";
 
 const BREEDS = ["Murrah buffalo", "Nili-Ravi buffalo"];
 const SEX_OPTIONS = ["Female", "Male"];
@@ -344,6 +343,50 @@ function getConceivedAIRecord(reproParity) {
 }
 function getCalfSireForCalving(animal, calvingParityNo) { const sourceReproParity = Number(calvingParityNo) - 1; if (sourceReproParity < 0) return ""; const reproParity = getReproParityByNo(animal, sourceReproParity); return formatBullSet(getConceivedAIRecord(reproParity)); }
 function getCalvingDateForParity(animal, parityNo) { return animal?.femaleDetails?.calvingParities?.find((c) => Number(c.parityNo) === Number(parityNo))?.calvingDate || ""; }
+
+function getCurrentPregnancyStatus(animal) {
+  if (!animal || animal.category !== "Female") return false;
+  const repros = animal.femaleDetails?.reproductionParities || [];
+  const calvings = animal.femaleDetails?.calvingParities || [];
+
+  const latestConceivedParity = [...repros]
+    .filter((r) => Boolean((r.conceptionDate || "").trim()))
+    .sort((a, b) => Number(b.parityNo || 0) - Number(a.parityNo || 0))[0];
+
+  if (!latestConceivedParity) return false;
+
+  const nextCalvingParityNo = Number(latestConceivedParity.parityNo) + 1;
+  const matchingCalving = calvings.find((c) => Number(c.parityNo) === nextCalvingParityNo);
+
+  if (matchingCalving && (matchingCalving.calvingDate || "").trim()) {
+    return false;
+  }
+
+  return true;
+}
+
+function getFemaleProgenyCountsFromHistory(animal) {
+  if (!animal || animal.category !== "Female") {
+    return { linkedTotal: 0, femaleCount: 0, maleCount: 0 };
+  }
+  const calvings = animal.femaleDetails?.calvingParities || [];
+  let femaleCount = 0;
+  let maleCount = 0;
+
+  calvings.forEach((cp) => {
+    if (cp.calvingOutcome !== "Normal calving") return;
+    if (!(cp.calfTag || "").trim()) return;
+    if (cp.calfSex === "Female") femaleCount += 1;
+    if (cp.calfSex === "Male") maleCount += 1;
+  });
+
+  return {
+    linkedTotal: femaleCount + maleCount,
+    femaleCount,
+    maleCount,
+  };
+}
+
 function computeCalvingMetrics(animal, calvingParityNo) {
   const p = Number(calvingParityNo), currentCalving = getCalvingDateForParity(animal, p), previousCalving = getCalvingDateForParity(animal, p - 1), previousRepro = getReproParityByNo(animal, p - 1);
   let afc = "", gestationPeriod = "", servicePeriod = "", calvingInterval = "";
@@ -512,71 +555,6 @@ function validateCurrentTab(selectedAnimal, detailTab) {
   return errors;
 }
 
-
-const STORAGE_KEY = "buffalo_app_phase_4_data";
-const SUPABASE_TABLE = "buffalo_app_records";
-const SUPABASE_ROW_ID = "main";
-
-function safeParseAnimals(raw) {
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-
-async function loadAnimalsFromSupabase() {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const { data, error } = await supabase
-    .from(SUPABASE_TABLE)
-    .select("payload")
-    .eq("id", SUPABASE_ROW_ID)
-    .maybeSingle();
-  if (error) throw error;
-  return Array.isArray(data?.payload) ? data.payload : [];
-}
-
-async function saveAnimalsToSupabase(animals) {
-  if (!isSupabaseConfigured || !supabase) return;
-  const { error } = await supabase
-    .from(SUPABASE_TABLE)
-    .upsert({ id: SUPABASE_ROW_ID, payload: animals }, { onConflict: "id" });
-  if (error) throw error;
-}
-function exportJsonBackup(data) {
-  const payload = JSON.stringify(data, null, 2);
-  const blob = new Blob([payload], { type: "application/json;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "buffalo-app-backup.json";
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-}
-
-function mergeAnimalsByIdOrTag(existing, incoming) {
-  const next = [...existing];
-  incoming.forEach((candidate) => {
-    const idx = next.findIndex((a) => a.id === candidate.id || (a.tagNo && candidate.tagNo && a.tagNo === candidate.tagNo));
-    if (idx >= 0) next[idx] = candidate;
-    else next.push(candidate);
-  });
-  return next;
-}
-
-function AuthField({ label, value, onChange, type = "text", placeholder = "" }) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
-    </label>
-  );
-}
-
 function Section({ title, children }) { return <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md"><div className="mb-3 text-lg font-semibold text-emerald-900">{title}</div>{children}</div>; }
 function Grid({ children }) { return <div className="grid grid-cols-1 gap-3 md:grid-cols-3">{children}</div>; }
 function TextField({ label, value, onChange, readOnly = false, placeholder = "" }) { return <label className="field"><span>{label}</span><input value={value} readOnly={readOnly} placeholder={placeholder} onChange={readOnly ? undefined : (e) => onChange(e.target.value)} /></label>; }
@@ -585,104 +563,7 @@ function TextAreaField({ label, value, onChange, rows = 3 }) { return <label cla
 function StatCard({ title, value }) { return <div className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-md"><div className="text-sm text-emerald-700">{title}</div><div className="text-2xl font-semibold text-emerald-900">{value}</div></div>; }
 
 export default function AnimalDataRecordingApp() {
-  const [animals, setAnimals] = useState(() => {
-    if (typeof window === "undefined") return [];
-    return safeParseAnimals(window.localStorage.getItem(STORAGE_KEY));
-  });
-  const [storageMode, setStorageMode] = useState(isSupabaseConfigured ? "Supabase + Local Backup" : "Browser Local Storage");
-  const [isInitialSyncComplete, setIsInitialSyncComplete] = useState(false);
-
-  useEffect(() => {
-    let mounted = true;
-    async function bootstrapAuth() {
-      if (!isSupabaseConfigured || !supabase) {
-        if (mounted) {
-          setAuthUser({ email: "local@browser.storage" });
-          setIsAuthLoading(false);
-        }
-        return;
-      }
-      try {
-        const session = await getCurrentSession();
-        if (mounted) {
-          setAuthUser(session?.user || null);
-          setIsAuthLoading(false);
-        }
-      } catch (error) {
-        if (mounted) {
-          setAuthUser(null);
-          setIsAuthLoading(false);
-          setValidationMessage(`Auth setup issue. ${error?.message || ""}`.trim());
-        }
-      }
-    }
-
-    bootstrapAuth();
-
-    const subscription = supabase?.auth?.onAuthStateChange?.((_event, session) => {
-      setAuthUser(session?.user || null);
-      setIsAuthLoading(false);
-    });
-
-    return () => {
-      mounted = false;
-      try {
-        subscription?.data?.subscription?.unsubscribe?.();
-      } catch {}
-    };
-  }, [authUser, isAuthLoading]);
-
-  async function handleAuthSubmit() {
-    if (!isSupabaseConfigured || !supabase) {
-      setValidationMessage("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.");
-      return;
-    }
-    if (!authEmail.trim() || !authPassword.trim()) {
-      setValidationMessage("Email and password are required.");
-      return;
-    }
-    setIsAuthLoading(true);
-    try {
-      if (authMode === "signin") {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: authEmail.trim(),
-          password: authPassword,
-        });
-        if (error) throw error;
-        setAuthUser(data?.user || null);
-        setValidationMessage("Signed in successfully.");
-      } else {
-        const { data, error } = await supabase.auth.signUp({
-          email: authEmail.trim(),
-          password: authPassword,
-        });
-        if (error) throw error;
-        setAuthUser(data?.user || null);
-        setValidationMessage("Account created. Check email if confirmation is enabled.");
-      }
-      setAuthPassword("");
-    } catch (error) {
-      setValidationMessage(`Authentication failed. ${error?.message || ""}`.trim());
-    } finally {
-      setIsAuthLoading(false);
-    }
-  }
-
-  async function handleSignOut() {
-    if (!isSupabaseConfigured || !supabase) return;
-    setIsAuthLoading(true);
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      setAuthUser(null);
-      setValidationMessage("Signed out.");
-    } catch (error) {
-      setValidationMessage(`Sign out failed. ${error?.message || ""}`.trim());
-    } finally {
-      setIsAuthLoading(false);
-    }
-  }
-
+  const [animals, setAnimals] = useState([]);
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -696,13 +577,6 @@ export default function AnimalDataRecordingApp() {
   const [editAnimalForm, setEditAnimalForm] = useState({ ...emptyAnimal });
   const [validationMessage, setValidationMessage] = useState("");
   const [archiveFilter, setArchiveFilter] = useState("All");
-  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
-  const fileInputRef = useRef(null);
-  const [authMode, setAuthMode] = useState("signin");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authUser, setAuthUser] = useState(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
 
   const normalizedAnimals = useMemo(() => normalizeLineageAcrossHerd(animals.map(withDefaults)), [animals]);
   const activeAnimals = useMemo(() => normalizedAnimals.filter((a) => !isArchivedAnimal(a)), [normalizedAnimals]);
@@ -770,112 +644,12 @@ export default function AnimalDataRecordingApp() {
       ],
     };
   }, [selectedAnimal, femaleProgenies, maleProgenies]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(animals));
-  }, [animals]);
-
-  useEffect(() => {
-    let active = true;
-    async function bootstrap() {
-      if (isSupabaseConfigured && isAuthLoading) return;
-      if (!isSupabaseConfigured || !supabase) {
-        if (active) {
-          setStorageMode("Browser Local Storage");
-          setIsInitialSyncComplete(true);
-        }
-        return;
-      }
-      if (!authUser) {
-        if (active) {
-          setAnimals([]);
-          setStorageMode("Supabase (sign in required)");
-          setIsInitialSyncComplete(true);
-        }
-        return;
-      }
-      try {
-        const remoteAnimals = await loadAnimalsFromSupabase();
-        if (!active) return;
-        const localAnimals = safeParseAnimals(window.localStorage.getItem(STORAGE_KEY));
-        const merged = normalizeLineageAcrossHerd(mergeAnimalsByIdOrTag(remoteAnimals || [], localAnimals || [])).sort(sortByTag);
-        setAnimals(merged);
-        if (merged.length && JSON.stringify(merged) !== JSON.stringify(remoteAnimals || [])) {
-          await saveAnimalsToSupabase(merged);
-        }
-        setStorageMode("Supabase + Local Backup");
-        setValidationMessage("Supabase storage connected.");
-      } catch (error) {
-        if (!active) return;
-        setStorageMode("Browser Local Storage (Supabase unavailable)");
-        setValidationMessage(`Supabase sync unavailable. Using browser storage only. ${error?.message || ""}`.trim());
-      } finally {
-        if (active) setIsInitialSyncComplete(true);
-      }
-    }
-    bootstrap();
-    return () => {
-      active = false
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isInitialSyncComplete || !isSupabaseConfigured || !supabase || !authUser) return;
-    let cancelled = false;
-    async function pushAnimals() {
-      try {
-        await saveAnimalsToSupabase(animals);
-      } catch (error) {
-        console.error("Supabase save failed", error);
-      }
-    }
-    pushAnimals();
-    return () => {
-      cancelled = true;
-    };
-  }, [animals, isInitialSyncComplete]);
-
-  function exportFullBackup() {
-    exportJsonBackup(animals);
-    setValidationMessage("Full JSON backup exported.");
-  }
-
-  function resetLocalData() {
-    const confirmed = window.confirm("This will clear all app data saved in this browser. Continue?");
-    if (!confirmed) return;
-    setAnimals([]);
-    setSelectedId(null);
-    setValidationMessage(isSupabaseConfigured ? "Local browser data cleared. Use Sync Now to overwrite remote data if desired." : "All locally saved data cleared.");
-  }
-
-  function triggerImportBackup() {
-    fileInputRef.current?.click();
-  }
-
-  function handleImportBackup(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const incoming = safeParseAnimals(String(reader.result || ""));
-      if (!incoming.length) {
-        setValidationMessage("Import failed or file had no valid animal data.");
-        return;
-      }
-      setAnimals((prev) => normalizeLineageAcrossHerd(mergeAnimalsByIdOrTag(prev, incoming)).sort(sortByTag));
-      setValidationMessage(`Imported ${incoming.length} records from backup.${isSupabaseConfigured ? " Use Sync Now to push to database." : ""}`);
-    };
-    reader.readAsText(file);
-    event.target.value = "";
-  }
-
   const visibleTabs = selectedAnimal?.category === "Female" ? FEMALE_TABS : selectedAnimal?.category === "Male" && selectedAnimal?.isBreedingBull === "Yes" ? MALE_TABS : [];
   const selectedReproParity = selectedAnimal?.femaleDetails?.reproductionParities?.find((p) => p.parityNo === selectedAnimal?.femaleDetails?.selectedReproParity) || null;
   const selectedLactation = selectedAnimal?.femaleDetails?.productionLactations?.find((l) => l.parityNo === selectedAnimal?.femaleDetails?.selectedProductionParity) || null;
   const productionMetrics = computeProductionMetrics(selectedLactation);
   const historyRows = selectedAnimal?.category === "Female" ? computeHistoryRows(selectedAnimal) : [];
-  const hasAppAccess = !isSupabaseConfigured || Boolean(authUser);
+  const femaleHistoryProgenyCounts = selectedAnimal?.category === "Female" ? getFemaleProgenyCountsFromHistory(selectedAnimal) : { linkedTotal: 0, femaleCount: 0, maleCount: 0 };
 
   const femaleProgenies = useMemo(() => {
     if (!selectedAnimal || selectedAnimal.category !== "Male" || selectedAnimal.isBreedingBull !== "Yes") return [];
@@ -897,9 +671,7 @@ export default function AnimalDataRecordingApp() {
       maleAnimals,
       breedingBulls,
       archivedCount,
-      pregnantFemales: femaleAnimals.filter((a) =>
-        (a.femaleDetails?.reproductionParities || []).some((r) => Boolean(r.conceptionDate))
-      ).length,
+      pregnantFemales: femaleAnimals.filter((a) => getCurrentPregnancyStatus(a)).length,
     };
   }, [normalizedAnimals]);
 
@@ -1122,109 +894,11 @@ export default function AnimalDataRecordingApp() {
           </div>
         </div>
 
-
-        {isSupabaseConfigured && (
-          <Section title="Supabase Access">
-            {isAuthLoading ? (
-              <div className="validation-box">Checking account access…</div>
-            ) : authUser ? (
-              <div className="action-row">
-                <div className="auth-status-card">
-                  <div className="auth-title">Signed in</div>
-                  <div className="auth-subtitle">{authUser.email}</div>
-                </div>
-                <button className="secondary-btn" onClick={handleSignOut}>Sign Out</button>
-              </div>
-            ) : (
-              <div className="stack-gap">
-                <div className="tab-row">
-                  <button className={authMode === "signin" ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setAuthMode("signin")}>Sign In</button>
-                  <button className={authMode === "signup" ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setAuthMode("signup")}>Create Account</button>
-                </div>
-                <Grid>
-                  <AuthField label="Email" value={authEmail} onChange={setAuthEmail} type="email" placeholder="you@example.com" />
-                  <AuthField label="Password" value={authPassword} onChange={setAuthPassword} type="password" placeholder="Enter password" />
-                </Grid>
-                <div className="action-row">
-                  <button className="primary-btn" onClick={handleAuthSubmit}>
-                    {authMode === "signin" ? "Sign In" : "Create Account"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </Section>
-        )}
-
         {validationMessage && (
           <Section title="Validation / Status">
             <div className="validation-box">{validationMessage}</div>
           </Section>
         )}
-
-
-        {!hasAppAccess && isSupabaseConfigured ? (
-          <Section title="Access Required">
-            <div className="validation-box">Sign in above to load and edit herd data stored in Supabase.</div>
-          </Section>
-        ) : (
-        <>
-        <Section title="Phase 4.1 Command Center">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json,application/json"
-            style={{ display: "none" }}
-            onChange={handleImportBackup}
-          />
-          <div className="helper-note">Storage mode: {storageMode}</div>
-          <div className="helper-note">User: {authUser?.email || "Not signed in"}</div>
-          <div className="action-row">
-            <button className="secondary-btn" onClick={exportFullBackup}>Export Full Backup</button>
-            <button className="secondary-btn" onClick={triggerImportBackup}>Import Backup</button>
-            <button className="secondary-btn" onClick={async () => {
-              if (!isSupabaseConfigured || !supabase) {
-                setValidationMessage("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.");
-                return;
-              }
-              try {
-                await saveAnimalsToSupabase(animals);
-                setValidationMessage("Data synced to Supabase.");
-              } catch (error) {
-                setValidationMessage(`Supabase sync failed. ${error?.message || ""}`.trim());
-              }
-            }}>Sync Now</button>
-            <button className="secondary-btn" onClick={() => setMobilePanelOpen((v) => !v)}>
-              {mobilePanelOpen ? "Hide Mobile Panel" : "Show Mobile Panel"}
-            </button>
-            <button className="secondary-btn danger-btn" onClick={resetLocalData}>Reset Local Data</button>
-          </div>
-          {mobilePanelOpen && (
-            <div className="mobile-panel">
-              <div className="helper-note">Quick mobile actions for small screens.</div>
-              <div className="action-row">
-                <button className="primary-btn" onClick={() => setShowAdd(true)}>Add Animal</button>
-                <button className="secondary-btn" onClick={jumpToAnimalBySearch}>Jump to Animal</button>
-                <button className="secondary-btn" onClick={() => setHerdView("current")}>Current Herd</button>
-                <button className="secondary-btn" onClick={() => setHerdView("archive")}>Archive</button>
-              </div>
-            </div>
-          )}
-        </Section>
-
-
-        <Section title="Database Setup Guide">
-          <div className="helper-note">
-            To enable shared storage, create a Supabase project, then add environment variables
-            <strong> VITE_SUPABASE_URL </strong> and <strong> VITE_SUPABASE_ANON_KEY </strong> in Vercel.
-            Create a table named <strong>buffalo_app_records</strong> with columns:
-            <strong> id </strong> (text, primary key) and <strong> payload </strong> (jsonb).
-            Enable Email auth in Supabase Authentication if you want user login.
-          </div>
-          <div className="helper-note">
-            Recommended SQL:
-            <code className="inline-code"> create table buffalo_app_records (id text primary key, payload jsonb not null default '[]'::jsonb); </code>
-          </div>
-        </Section>
 
         {showAdd && (
           <Section title="Add Animal">
@@ -1669,14 +1343,6 @@ export default function AnimalDataRecordingApp() {
               </Section>
             )}
           </div>
-        </div>
-
-        </>
-        )}
-
-        <div className="mobile-sticky-bar">
-          <button className="primary-btn mobile-grow" onClick={() => setShowAdd(true)} disabled={!hasAppAccess}>Add Animal</button>
-          <button className="secondary-btn mobile-grow" onClick={jumpToAnimalBySearch} disabled={!hasAppAccess}>Jump</button>
         </div>
       </div>
     </div>

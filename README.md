@@ -1,16 +1,4 @@
-# Phase 4.2 patch
+# Fix patch for Phase 3.2
 
-Adds Supabase email/password authentication and access control for shared storage.
-
-## Required environment variables
-- VITE_SUPABASE_URL
-- VITE_SUPABASE_ANON_KEY
-
-## Required database table
-create table buffalo_app_records (
-  id text primary key,
-  payload jsonb not null default '[]'::jsonb
-);
-
-## Auth
-Enable Email auth in Supabase Authentication.
+Corrects dashboard pregnant-female counting so historical conception records already followed by calving are not counted as current pregnancy.
+Also corrects female history progeny cards to count progeny from recorded calving history.
