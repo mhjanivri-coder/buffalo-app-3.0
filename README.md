@@ -1,3 +1,3 @@
-# Phase 2.7 patch
+# Phase 2.8 patch
 
-Adds Edit Animal button in Selected Animal Preview and Save and Next / Submit controls across female and male tabs.
+Adds stronger breeding-bull lineage matching using explicit sire fields when available, improved daughter summaries, archived-lineage continuity checks, and tighter breeding-set guidance.

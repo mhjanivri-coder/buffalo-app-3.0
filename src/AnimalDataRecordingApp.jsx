@@ -178,6 +178,59 @@ function withDefaults(animal) {
   };
 }
 function formatBullSet(aiRecord) { if (!aiRecord) return ""; const bullNo = (aiRecord.aiBullNo || "").trim(); const setNo = (aiRecord.aiSetNo || "").trim(); if (bullNo && setNo) return `${bullNo}/${setNo}`; return bullNo || setNo || ""; }
+
+function splitSireString(value) {
+  const raw = (value || "").trim();
+  if (!raw) return { bullNo: "", setNo: "" };
+  const parts = raw.split("/").map((s) => s.trim()).filter(Boolean);
+  return { bullNo: parts[0] || "", setNo: parts[1] || "" };
+}
+function bullLineageMatches(animal, bull) {
+  if (!animal || !bull) return false;
+  const lineageBullTag = animal.linkedSireTag || "";
+  const lineageBullSet = animal.linkedSireSet || "";
+  if (lineageBullTag && lineageBullTag === bull.tagNo) {
+    if (!bull.breedingSet) return true;
+    if (!lineageBullSet) return true;
+    return lineageBullSet === bull.breedingSet;
+  }
+  const sireText = animal.category === "Female"
+    ? animal.femaleDetails?.pedigree?.sire || ""
+    : animal.maleDetails?.pedigree?.sire || "";
+  const parsed = splitSireString(sireText);
+  if (!parsed.bullNo) return false;
+  if (parsed.bullNo !== bull.tagNo) return false;
+  if (!bull.breedingSet || !parsed.setNo) return true;
+  return parsed.setNo === bull.breedingSet;
+}
+function summarizeDaughterProduction(daughters) {
+  const lactations = daughters.flatMap((a) => (a.femaleDetails?.productionLactations || []).map((l) => ({ animal: a, lactation: l })));
+  const computed = lactations.map(({ animal, lactation }) => ({ animal, lactation, metrics: computeProductionMetrics(lactation) }));
+  const totalTLMY = computed.reduce((s, x) => s + Number(x.metrics.totalLactationMilk || 0), 0);
+  const totalSLMY = computed.reduce((s, x) => s + Number(x.metrics.standardLactationMilk || 0), 0);
+  const maxPeak = computed.reduce((m, x) => Math.max(m, Number(x.metrics.peakYield || 0)), 0);
+  return {
+    daughterCount: daughters.length,
+    lactationCount: computed.length,
+    totalTLMY,
+    totalSLMY,
+    maxPeak,
+    averageTLMY: computed.length ? Math.round((totalTLMY / computed.length) * 100) / 100 : 0,
+    averageSLMY: computed.length ? Math.round((totalSLMY / computed.length) * 100) / 100 : 0,
+  };
+}
+function summarizeDaughterReproduction(daughters) {
+  const parities = daughters.flatMap((a) => (a.femaleDetails?.reproductionParities || []).map((r) => ({ animal: a, repro: r })));
+  const conceived = parities.filter((x) => Boolean(x.repro.conceptionDate)).length;
+  const services = parities.reduce((s, x) => s + Number((x.repro.aiRecords || []).length), 0);
+  return {
+    daughterCount: daughters.length,
+    parityCount: parities.length,
+    conceivedCount: conceived,
+    totalServices: services,
+    avgServicesPerParity: parities.length ? Math.round((services / parities.length) * 100) / 100 : 0,
+  };
+}
 function getReproParityByNo(animal, parityNo) { return animal?.femaleDetails?.reproductionParities?.find((p) => Number(p.parityNo) === Number(parityNo)) || null; }
 function getConceivedAIRecord(reproParity) {
   if (!reproParity) return null;
@@ -207,7 +260,8 @@ function buildAutoCalfAnimal(dam, calvingParity) {
   const calfTag = (calvingParity?.calfTag || "").trim(), calfSex = calvingParity?.calfSex || "", calfDob = calvingParity?.calvingDate || "";
   const calfSire = (calvingParity?.calfSire || getCalfSireForCalving(dam, calvingParity?.parityNo) || "").trim();
   if (!calfTag || !calfSex || !calfDob) return null;
-  const base = { id: `calf-${dam.id}-${calvingParity.parityNo}`, tagNo: calfTag, breed: dam.breed || "Nili-Ravi buffalo", dob: calfDob, category: calfSex === "Female" ? "Female" : "Male", identificationMark: "", status: "Active (present in herd)", exitDate: "", exitReason: "", isBreedingBull: "No", breedingSet: "", linkedDamId: dam.id, linkedCalvingParityNo: String(calvingParity.parityNo), autoAddedFromBirth: true, preCalvingLifecycle: "Heifer" };
+  const sireParts = splitSireString(calfSire);
+  const base = { id: `calf-${dam.id}-${calvingParity.parityNo}`, tagNo: calfTag, breed: dam.breed || "Nili-Ravi buffalo", dob: calfDob, category: calfSex === "Female" ? "Female" : "Male", identificationMark: "", status: "Active (present in herd)", exitDate: "", exitReason: "", isBreedingBull: "No", breedingSet: "", linkedDamId: dam.id, linkedCalvingParityNo: String(calvingParity.parityNo), linkedSireTag: sireParts.bullNo || "", linkedSireSet: sireParts.setNo || "", autoAddedFromBirth: true, preCalvingLifecycle: "Heifer" };
   if (calfSex === "Female") {
     return withDefaults({ ...base, femaleDetails: { pedigree: { ...emptyPedigree, dam: dam.tagNo || "", sire: calfSire }, reproductionParities: [makeReproParity(0)], selectedReproParity: "0", calvingParities: [makeCalvingParity(1)], productionLactations: [makeProductionLactation(1)], selectedProductionParity: "1", historyMeta: { reasonForCulling: "", bookValue: "" }, health: defaultHealth() } });
   }
@@ -331,12 +385,14 @@ export default function AnimalDataRecordingApp() {
 
   const femaleProgenies = useMemo(() => {
     if (!selectedAnimal || selectedAnimal.category !== "Male" || selectedAnimal.isBreedingBull !== "Yes") return [];
-    return normalizedAnimals.filter((a) => a.category === "Female" && a.maleDetails == null && ((a.femaleDetails?.pedigree?.sire || "") === selectedAnimal.tagNo || (a.femaleDetails?.pedigree?.sire || "").startsWith(`${selectedAnimal.tagNo}/`))).sort(sortByTag);
+    return normalizedAnimals.filter((a) => a.category === "Female" && bullLineageMatches(a, selectedAnimal)).sort(sortByTag);
   }, [normalizedAnimals, selectedAnimal]);
   const maleProgenies = useMemo(() => {
     if (!selectedAnimal || selectedAnimal.category !== "Male" || selectedAnimal.isBreedingBull !== "Yes") return [];
-    return normalizedAnimals.filter((a) => a.category === "Male" && a.id !== selectedAnimal.id && (((a.maleDetails?.pedigree?.sire || "") === selectedAnimal.tagNo) || ((a.maleDetails?.pedigree?.sire || "").startsWith(`${selectedAnimal.tagNo}/`)))).sort(sortByTag);
+    return normalizedAnimals.filter((a) => a.category === "Male" && a.id !== selectedAnimal.id && bullLineageMatches(a, selectedAnimal)).sort(sortByTag);
   }, [normalizedAnimals, selectedAnimal]);
+  const daughterProductionSummary = useMemo(() => summarizeDaughterProduction(femaleProgenies), [femaleProgenies]);
+  const daughterReproductionSummary = useMemo(() => summarizeDaughterReproduction(femaleProgenies), [femaleProgenies]);
 
   function handleFormStatusChange(status) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, status })); }
   function handleFormCategoryChange(category) { setNewAnimal((s) => normalizeAnimalFormData({ ...s, category })); }
@@ -501,6 +557,7 @@ export default function AnimalDataRecordingApp() {
                 <>
                   <SelectField label="Selected for breeding" value={newAnimal.isBreedingBull || "No"} onChange={(v) => setNewAnimal((s) => normalizeAnimalFormData({ ...s, isBreedingBull: v }))} options={["No", "Yes"]} />
                   {newAnimal.isBreedingBull === "Yes" && <TextField label="Included as breeding in which set (Roman numerals only)" value={newAnimal.breedingSet || ""} onChange={(v) => setNewAnimal((s) => ({ ...s, breedingSet: normalizeRomanInput(v) }))} />}
+                  {newAnimal.isBreedingBull === "Yes" && <div className="helper-note">Example: XI, XII, XIII</div>}
                 </>
               )}
               {newAnimal.status !== "Active (present in herd)" && (
@@ -530,6 +587,7 @@ export default function AnimalDataRecordingApp() {
                 <>
                   <SelectField label="Selected for breeding" value={editAnimalForm.isBreedingBull || "No"} onChange={(v) => setEditAnimalForm((s) => normalizeAnimalFormData({ ...s, isBreedingBull: v }))} options={["No", "Yes"]} />
                   {editAnimalForm.isBreedingBull === "Yes" && <TextField label="Included as breeding in which set (Roman numerals only)" value={editAnimalForm.breedingSet || ""} onChange={(v) => setEditAnimalForm((s) => ({ ...s, breedingSet: normalizeRomanInput(v) }))} />}
+                  {editAnimalForm.isBreedingBull === "Yes" && <div className="helper-note">Example: XI, XII, XIII</div>}
                 </>
               )}
               {editAnimalForm.status !== "Active (present in herd)" && (
@@ -589,6 +647,7 @@ export default function AnimalDataRecordingApp() {
                   <div><strong>Identification Mark:</strong> {selectedAnimal.identificationMark || "—"}</div>
                   {selectedAnimal.category === "Female" && <div><strong>Current category:</strong> {getFemaleLifecycle(selectedAnimal)}</div>}
                   {selectedAnimal.category === "Male" && <div><strong>Breeding bull:</strong> {selectedAnimal.isBreedingBull === "Yes" ? `Yes (${selectedAnimal.breedingSet || "Set blank"})` : "No"}</div>}
+                  {selectedAnimal.category === "Male" && selectedAnimal.isBreedingBull === "Yes" && <div><strong>Linked progenies:</strong> {femaleProgenies.length + maleProgenies.length}</div>}
                 </div>
               )}
             </Section>
@@ -806,7 +865,14 @@ export default function AnimalDataRecordingApp() {
                       {DAUGHTER_PERF_SUBTABS.map((tab) => <button key={tab.id} className={daughterPerfSubTab === tab.id ? "primary-btn tab-btn" : "secondary-btn tab-btn"} onClick={() => setDaughterPerfSubTab(tab.id)}>{tab.label}</button>)}
                     </div>
                     {daughterPerfSubTab === "production" && (
-                      <div className="table-wrap">
+                      <div className="stack-gap">
+                        <div className="stats-grid slim-stats">
+                          <StatCard title="Daughters" value={daughterProductionSummary.daughterCount} />
+                          <StatCard title="Lactations" value={daughterProductionSummary.lactationCount} />
+                          <StatCard title="Avg TLMY" value={daughterProductionSummary.averageTLMY} />
+                          <StatCard title="Max Peak Yield" value={daughterProductionSummary.maxPeak} />
+                        </div>
+                        <div className="table-wrap">
                         <table className="history-table">
                           <thead><tr><th>Daughter Tag</th><th>Current category</th><th>Parity/Lactation</th><th>TLMY</th><th>SLMY</th><th>Peak yield</th></tr></thead>
                           <tbody>
@@ -818,9 +884,17 @@ export default function AnimalDataRecordingApp() {
                         </table>
                         {femaleProgenies.length === 0 && <div className="empty-note">No daughters linked yet.</div>}
                       </div>
+                      </div>
                     )}
                     {daughterPerfSubTab === "reproduction" && (
-                      <div className="table-wrap">
+                      <div className="stack-gap">
+                        <div className="stats-grid slim-stats">
+                          <StatCard title="Daughters" value={daughterReproductionSummary.daughterCount} />
+                          <StatCard title="Parities" value={daughterReproductionSummary.parityCount} />
+                          <StatCard title="Conceived" value={daughterReproductionSummary.conceivedCount} />
+                          <StatCard title="Avg services/parity" value={daughterReproductionSummary.avgServicesPerParity} />
+                        </div>
+                        <div className="table-wrap">
                         <table className="history-table">
                           <thead><tr><th>Daughter Tag</th><th>Current category</th><th>Parity</th><th>Conception date</th><th>Expected calving</th><th>Services</th></tr></thead>
                           <tbody>
@@ -828,6 +902,7 @@ export default function AnimalDataRecordingApp() {
                           </tbody>
                         </table>
                         {femaleProgenies.length === 0 && <div className="empty-note">No daughters linked yet.</div>}
+                      </div>
                       </div>
                     )}
                   </div>
@@ -860,6 +935,7 @@ export default function AnimalDataRecordingApp() {
                           <tr><td>Male progenies</td><td>{maleProgenies.length}</td></tr>
                           <tr><td>Total daughters in milk</td><td>{femaleProgenies.filter((a) => getFemaleLifecycle(a) === "Milk").length}</td></tr>
                           <tr><td>Total archived progenies retained in lineage</td><td>{[...femaleProgenies, ...maleProgenies].filter((a) => isArchivedAnimal(a)).length}</td></tr>
+                          <tr><td>Lineage continuity check</td><td>{(femaleProgenies.length + maleProgenies.length) > 0 ? "OK" : "No linked progenies yet"}</td></tr>
                         </tbody>
                       </table>
                     </div>
